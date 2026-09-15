@@ -5,6 +5,8 @@ import random
 from pathlib import Path
 
 import pygame
+from Game.progression import JETS, DRONE_PRICES
+from Game.support import GUARD_RADIUS
 
 INK = (10, 19, 29)
 PANEL = (13, 27, 39)
@@ -29,6 +31,8 @@ class Renderer:
             "boss": pygame.transform.scale(pygame.image.load(str(ships / "ship_0002.png")).convert_alpha(), (136, 136)),
         }
         self.rotation_cache = {}
+        self.jet_sprites = {jet.index: pygame.transform.scale(pygame.image.load(str(ships / f"ship_{jet.index:04d}.png")).convert_alpha(), (72, 72)) for jet in JETS}
+        self.player_index = 11
         self.world_size = world_size
         self.terrain = self.make_terrain(world_size)
         self.cloud = pygame.Surface((280, 160), pygame.SRCALPHA)
@@ -100,6 +104,10 @@ class Renderer:
             pygame.draw.circle(self.screen, GOLD, position, 24, 2)
 
     def draw(self, game):
+        if self.player_index != game.jet.index:
+            self.player_index = game.jet.index
+            self.sprites["player"] = self.jet_sprites[game.jet.index]
+            self.rotation_cache = {key: value for key, value in self.rotation_cache.items() if key[0] != "player"}
         offset = game.camera.copy()
         if game.state == "playing" and game.shake > 0:
             offset += pygame.Vector2(game.visual_rng.uniform(-game.shake, game.shake), game.visual_rng.uniform(-game.shake, game.shake))
@@ -111,6 +119,16 @@ class Renderer:
             cloud_pos = pygame.Vector2((i * 367 + 100) % (self.width + 350) - 200, (i * 197) % (self.height + 240) - 160)
             cloud_pos -= pygame.Vector2(offset.x * 0.17 % 120, offset.y * 0.17 % 90)
             self.screen.blit(self.cloud, cloud_pos)
+        if game.state == "hangar":
+            self.hangar(game)
+            return
+
+        if game.phoenix.guarding:
+            aura = pygame.Surface((int(GUARD_RADIUS * 2 + 12), int(GUARD_RADIUS * 2 + 12)), pygame.SRCALPHA)
+            center = aura.get_width() // 2
+            pygame.draw.circle(aura, (255, 177, 60, 22), (center, center), int(GUARD_RADIUS))
+            pygame.draw.circle(aura, (255, 192, 78, 145), (center, center), int(GUARD_RADIUS), 2)
+            self.screen.blit(aura, aura.get_rect(center=game.position - offset))
 
         for particle in game.particles:
             pos, _, life, total, color, size = particle
@@ -130,16 +148,19 @@ class Renderer:
         for shot in game.projectiles:
             pos = shot.position - offset
             direction = shot.velocity.normalize() if shot.velocity.length_squared() else pygame.Vector2(1, 0)
-            color = GOLD if shot.owner == "player" else RED
+            color = RED if shot.owner == "enemy" else TEAL if shot.owner == "drone" else GOLD
             pygame.draw.line(self.screen, color, pos - direction * (24 if shot.missile else 12), pos, 4 if shot.missile else 2)
-            pygame.draw.circle(self.screen, WHITE if shot.owner == "player" else RED, pos, 3)
+            pygame.draw.circle(self.screen, RED if shot.owner == "enemy" else WHITE, pos, 3)
+
+        if game.state != "menu":
+            for drone in game.drones:
+                self.drone(drone.position - offset, game.time)
+            if game.phoenix.active:
+                self.phoenix_bird(game.phoenix.position - offset, game.phoenix.heading, game.time)
 
         player = game.position - offset
         if game.state != "menu":
             self.aircraft("player", player, game.heading)
-        if game.shield > 0:
-            pygame.draw.circle(self.screen, TEAL, player, 46 + round(math.sin(game.time * 9) * 2), 2)
-            pygame.draw.circle(self.screen, (81, 150, 161), player, 52, 1)
         if game.state == "playing":
             pygame.draw.line(self.screen, (98, 166, 173), player + game.heading * 44, player + game.heading * 67, 1)
             self.target_reticle(game, offset)
@@ -193,7 +214,7 @@ class Renderer:
     def hud(self, game):
         self.panel(pygame.Rect(20, 18, 255, 61))
         self.text("PROJECT / PHOENIX", (36, 29), 24)
-        self.text("FLIGHT OPERATIONS   //   V2", (36, 55), 18, TEAL)
+        self.text(f"{game.jet.name.upper()} / {game.progress.coins} COINS", (36, 55), 18, GOLD)
         self.panel(pygame.Rect(self.width / 2 - 163, 18, 326, 61))
         self.text(f"WAVE {game.waves.wave:02d}  /  {game.score:06d} PTS", (self.width / 2, 39), 28, WHITE, True)
         self.text(f"{len(game.enemies) + game.waves.remaining} CONTACTS REMAINING", (self.width / 2, 63), 18, MUTED, True)
@@ -211,7 +232,7 @@ class Renderer:
         pygame.draw.circle(self.screen, TEAL, radar_pos(game.position), 4)
 
         self.panel(pygame.Rect(20, self.height - 149, 274, 126))
-        self.meter(38, self.height - 135, "HULL", f"{game.health:.0f}%", game.health / 100, RED if game.health < 30 else TEAL)
+        self.meter(38, self.height - 135, "HULL", f"{game.health:.0f}/{game.jet.hull}", game.health / game.jet.hull, RED if game.health < game.jet.hull * 0.3 else TEAL)
         self.meter(38, self.height - 97, "AFTERBURNER", f"{game.flight.boost_energy:.0f}%", game.flight.boost_ratio, (100, 191, 255))
         self.meter(38, self.height - 59, f"PHOENIX / FLOW x{game.flow.flow:.1f}", f"{game.flow.energy:.0f}%", game.flow.energy_ratio, GOLD)
         self.panel(pygame.Rect(self.width - 314, self.height - 126, 294, 103))
@@ -228,14 +249,17 @@ class Renderer:
         self.text(f"ASSIST {'ON' if game.assist else 'OFF'} [F]   SOUND {'OFF' if game.audio.muted else 'ON'} [M]", (self.width - 298, self.height - 45), 18, MUTED)
         self.text(f"{game.velocity.length():03.0f}", (self.width / 2, self.height - 88), 48, WHITE, True)
         self.text("FLIGHT SPEED", (self.width / 2, self.height - 54), 18, MUTED, True)
-        if game.shield > 0:
-            self.text(f"PHOENIX SHIELD  {game.shield:.1f}s", (self.width / 2, self.height - 123), 21, TEAL, True)
+        if game.phoenix.active:
+            self.text(f"PHOENIX {game.phoenix.mode.upper()} / {game.phoenix.remaining:.0f}s / B SWITCH", (self.width / 2, self.height - 123), 21, GOLD, True)
         elif game.flow.ready:
-            self.text("PHOENIX READY / PRESS E", (self.width / 2, self.height - 123), 21, GOLD, True)
+            self.text("PHOENIX READY / E SUMMON / B MODE", (self.width / 2, self.height - 123), 21, GOLD, True)
+        self.text(f"{len(game.drones)} DRONE{'S' if len(game.drones) != 1 else ''} / H HANGAR", (self.width / 2, self.height - 27), 18, TEAL, True)
+        if game.progress.error:
+            self.text(game.progress.error, (self.width / 2, 190), 21, RED, True)
         if game.banner_timer > 0 and game.state == "playing":
             self.text(game.banner, (self.width / 2, 116), 34, GOLD, True)
         if game.waves.cleared and game.state == "playing":
-            self.text(f"SECTOR CLEAR / NEXT WAVE IN {game.waves.intermission:.1f}s", (self.width / 2, 149), 21, TEAL, True)
+            self.text(f"NEXT WAVE {game.waves.intermission:.1f}s / H HANGAR", (self.width / 2, 149), 21, TEAL, True)
 
     def dim(self):
         surface = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
@@ -253,18 +277,100 @@ class Renderer:
         self.text("LAUNCH SORTIE   /   ENTER", button.center, 24, INK, True)
         self.text("W thrust   S brake   A/D bank   Shift boost", (82, 488), 24)
         self.text("Mouse aim   Left fire   Right/Space missile", (82, 520), 24)
-        self.text("E shield   F assist   M mute   P/Esc pause", (82, 552), 24)
-        self.text("WAVES  /  RADAR  /  PHOENIX FLOW  /  BOSS EVERY 9 WAVES", (82, self.height - 65), 18, TEAL)
+        self.text("E Phoenix   B mode   H hangar   P/Esc pause", (82, 552), 24)
+        self.text(f"{game.progress.coins} COINS / {len(game.progress.owned)} AIRCRAFT / H OPEN HANGAR", (82, self.height - 65), 21, GOLD)
+        if game.progress.error:
+            self.text(game.progress.error, (82, self.height - 32), 18, RED)
         preview = pygame.transform.scale(self.sprites["player"], (200, 200))
         self.screen.blit(preview, preview.get_rect(center=(self.width - 270, self.height / 2)))
         pygame.draw.circle(self.screen, (57, 91, 106), (self.width - 270, self.height // 2), 119, 1)
         pygame.draw.circle(self.screen, (57, 91, 106), (self.width - 270, self.height // 2), 145, 1)
-        self.text("PHOENIX / 0011", (self.width - 270, self.height / 2 + 180), 21, GOLD, True)
+        self.text(f"{game.jet.name.upper()} / {game.jet.index:04d}", (self.width - 270, self.height / 2 + 180), 21, GOLD, True)
 
     def overlay(self, game):
         self.dim()
         center = self.width / 2
         self.text("FLIGHT PAUSED" if game.state == "paused" else "SORTIE COMPLETE", (center, self.height / 2 - 65), 48, GOLD, True)
         self.text(f"WAVE {game.waves.wave:02d}  /  SCORE {game.score:06d}", (center, self.height / 2), 28, WHITE, True)
-        label = "P / ESC TO RESUME" if game.state == "paused" else "R TO FLY AGAIN   /   Q FOR MENU"
+        label = "P / ESC RESUME  /  H HANGAR" if game.state == "paused" else "R FLY AGAIN  /  H HANGAR  /  Q MENU"
         self.text(label, (center, self.height / 2 + 57), 24, TEAL, True)
+
+    def drone(self, position, time):
+        for delta in ((-11, -8), (11, -8), (-11, 8), (11, 8)):
+            pos = position + pygame.Vector2(delta)
+            pygame.draw.line(self.screen, (102, 182, 193), position, pos, 2)
+            pygame.draw.circle(self.screen, (22, 63, 77), pos, 6)
+            pygame.draw.line(self.screen, TEAL, pos - pygame.Vector2(5, math.sin(time * 30) * 3), pos + pygame.Vector2(5, math.sin(time * 30) * 3), 1)
+        pygame.draw.polygon(self.screen, TEAL, [position + pygame.Vector2(0, -9), position + pygame.Vector2(7, 0), position + pygame.Vector2(0, 9), position + pygame.Vector2(-7, 0)])
+        pygame.draw.circle(self.screen, WHITE, position, 2)
+
+    def phoenix_bird(self, position, heading, time):
+        angle = math.degrees(math.atan2(heading.y, heading.x))
+        flap = math.sin(time * 9) * 13
+        def shape(points, color):
+            pygame.draw.polygon(self.screen, color, [position + pygame.Vector2(point).rotate(angle) for point in points])
+        shape([(-12, -5), (-23, -24 - flap), (-48, -47 - flap), (-31, -16), (-22, -7)], (255, 120, 38))
+        shape([(-12, 5), (-23, 24 + flap), (-48, 47 + flap), (-31, 16), (-22, 7)], (255, 120, 38))
+        shape([(-9, -5), (-17, -24 - flap * 0.7), (-36, -35 - flap * 0.7), (-21, -10)], GOLD)
+        shape([(-9, 5), (-17, 24 + flap * 0.7), (-36, 35 + flap * 0.7), (-21, 10)], GOLD)
+        shape([(-11, -7), (-60, -15), (-36, 0), (-60, 15), (-11, 7)], (230, 85, 33))
+        shape([(-20, -7), (14, -10), (26, -5), (39, 1), (26, 7), (8, 9), (-20, 7)], (255, 220, 109))
+        shape([(23, -5), (45, 1), (26, 5)], (255, 150, 43))
+        eye = position + pygame.Vector2(22, -3).rotate(angle)
+        pygame.draw.circle(self.screen, INK, eye, 2)
+
+    def hangar_card(self, index):
+        return pygame.Rect(28 + index % 4 * 210, 112 + index // 4 * 136, 194, 120)
+
+    def hangar_buy_button(self):
+        return pygame.Rect(self.width - 390, 467, 350, 49)
+
+    def drone_buy_button(self):
+        return pygame.Rect(567, self.height - 146, 255, 47)
+
+    def hangar_back_button(self):
+        return pygame.Rect(self.width - 238, 30, 198, 42)
+
+    def hangar(self, game):
+        self.dim()
+        self.text("PHOENIX / AIRCRAFT HANGAR", (28, 30), 34, WHITE)
+        self.text(f"{game.progress.coins} COINS / EARNED IN COMBAT / SAVED AFTER DEFEAT", (30, 73), 21, GOLD)
+        back = self.hangar_back_button()
+        self.panel(back)
+        self.text("BACK / ESC", back.center, 21, TEAL, True)
+        for index, jet in enumerate(JETS):
+            card = self.hangar_card(index)
+            self.panel(card)
+            selected = index == game.hangar_selection
+            if selected:
+                pygame.draw.rect(self.screen, GOLD, card, 2, border_radius=12)
+            sprite = self.jet_sprites[jet.index]
+            self.screen.blit(sprite, sprite.get_rect(center=(card.x + 44, card.y + 48)))
+            self.text(jet.name, (card.x + 85, card.y + 20), 21)
+            self.text(jet.role, (card.x + 85, card.y + 46), 18, MUTED)
+            state = "EQUIPPED" if jet.index == game.progress.selected else "OWNED" if jet.index in game.progress.owned else f"{jet.price} COINS"
+            self.text(state, (card.x + 15, card.y + 94), 18, TEAL if jet.index in game.progress.owned else GOLD)
+        jet = JETS[game.hangar_selection]
+        detail = pygame.Rect(self.width - 410, 112, 390, 420)
+        self.panel(detail)
+        self.text(jet.name.upper(), (detail.centerx, 149), 34, GOLD, True)
+        preview = pygame.transform.scale(self.jet_sprites[jet.index], (132, 132))
+        self.screen.blit(preview, preview.get_rect(center=(detail.centerx, 235)))
+        self.text(f"{jet.role.upper()} / SHIP {jet.index:04d}", (detail.centerx, 313), 21, TEAL, True)
+        self.text(f"HULL {jet.hull}   /   SPEED {jet.speed}", (detail.x + 25, 350), 24)
+        self.text(f"CANNON {jet.damage} / {1 / jet.interval:.1f} SHOTS PER SEC", (detail.x + 25, 385), 21)
+        self.text("Choose a role that fits your flying.", (detail.x + 25, 422), 21, MUTED)
+        buy = self.hangar_buy_button()
+        pygame.draw.rect(self.screen, TEAL if jet.index in game.progress.owned else GOLD, buy, border_radius=8)
+        label = "EQUIP / ENTER" if jet.index in game.progress.owned else f"BUY & EQUIP / {jet.price} COINS"
+        self.text(label, buy.center, 21, INK, True)
+        panel = pygame.Rect(28, self.height - 164, 814, 87)
+        self.panel(panel)
+        self.text(f"DRONE SUPPORT / {1 + game.progress.drone_slots} OF 3", (46, panel.y + 15), 24, TEAL)
+        self.text("One free escort. Purchased drones stay unlocked.", (46, panel.y + 49), 21, MUTED)
+        button = self.drone_buy_button()
+        pygame.draw.rect(self.screen, GOLD, button, border_radius=8)
+        label = "ALL DRONES UNLOCKED" if game.progress.drone_slots == 2 else f"BUY DRONE / {DRONE_PRICES[game.progress.drone_slots]} / U"
+        self.text(label, button.center, 18, INK, True)
+        message = game.progress.error or game.shop_message or "A/D select / Enter buy or equip / U buy drone / Esc return"
+        self.text(message, (30, self.height - 48), 21, RED if game.progress.error else WHITE)

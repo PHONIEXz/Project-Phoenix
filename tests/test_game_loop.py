@@ -1,5 +1,7 @@
 import os
 import unittest
+import tempfile
+from pathlib import Path
 from collections import defaultdict
 from unittest.mock import patch
 
@@ -11,6 +13,8 @@ import pygame
 from MainContents import Game, WORLD_SIZE
 from Game.combat import Enemy, Projectile
 from Game.renderer import Renderer
+from Game.progression import Progress
+from Game.support import GUARD_RADIUS, reinforce_drones
 
 
 def held(*keys):
@@ -33,13 +37,17 @@ class GameTests(unittest.TestCase):
         pygame.quit()
 
     def setUp(self):
+        self.save_dir = tempfile.TemporaryDirectory()
         with patch("MainContents.Renderer", return_value=self.renderer):
-            self.game = Game(self.screen, seed=17)
+            self.game = Game(self.screen, seed=17, save_path=Path(self.save_dir.name) / "progress.json")
         self.game.audio.muted = True
         self.game.reset()
         self.game.waves.remaining = 1
         self.game.waves.spawn_timer = 999
         self.mouse = self.game.last_mouse.copy()
+
+    def tearDown(self):
+        self.save_dir.cleanup()
 
     def tick(self, keys=None, buttons=(False, False, False), dt=0.016):
         self.game.update(dt, keys if keys is not None else held(), self.mouse, buttons)
@@ -99,14 +107,15 @@ class GameTests(unittest.TestCase):
         self.assertEqual(self.game.flow.energy, before)
         self.assertEqual(self.game.health, 100)
 
-    def test_shield_blocks_hits_then_damage_breaks_flow(self):
+    def test_phoenix_guard_blocks_hits_then_damage_breaks_flow(self):
         self.game.flow.reward_maneuver(100)
         self.game.event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_e))
         self.assertEqual(self.game.flow.energy, 0)
-        self.assertEqual(self.game.shield, 4)
+        self.assertEqual(self.game.phoenix.remaining, 50)
+        self.game.phoenix.toggle()
         self.game.damage(8)
         self.assertEqual(self.game.health, 100)
-        self.game.shield = 0
+        self.game.phoenix.remaining = 0
         self.game.flow.reward_maneuver(12)
         self.game.damage(8)
         self.assertEqual(self.game.health, 92)
@@ -149,11 +158,11 @@ class GameTests(unittest.TestCase):
         self.game.waves.remaining = 0
         self.tick()
         self.assertTrue(self.game.waves.cleared)
-        self.assertEqual(self.game.health, 82)
+        self.assertEqual(self.game.health, 92)
         for _ in range(60):
             self.tick()
         self.assertEqual(self.game.waves.wave, 1)
-        for _ in range(170):
+        for _ in range(330):
             self.tick()
         self.assertEqual(self.game.waves.wave, 2)
 
@@ -188,10 +197,118 @@ class GameTests(unittest.TestCase):
     def test_all_screens_render_with_existing_aircraft_assets(self):
         self.game.enemies = [enemy_at(self.game.position + pygame.Vector2(260, 0), kind=kind) for kind in ("hunter", "flanker", "bomber", "boss")]
         self.game.lock.update(self.game.enemies, self.game.position, self.game.heading, 1)
-        for state in ("menu", "playing", "paused", "gameover"):
+        for state in ("menu", "playing", "paused", "gameover", "hangar"):
             self.game.state = state
             self.renderer.draw(self.game)
         self.assertGreater(len(self.renderer.rotation_cache), 0)
+
+    def test_free_drone_auto_fires_without_player_input(self):
+        self.assertEqual(len(self.game.drones), 1)
+        self.game.enemies = [enemy_at(self.game.position + pygame.Vector2(300, 0))]
+        for _ in range(22):
+            self.tick()
+        self.assertTrue(any(shot.owner == "drone" for shot in self.game.projectiles))
+
+    def test_paid_drones_reinforce_each_wave(self):
+        self.game.progress.earn(1500)
+        self.game.progress.buy_drone()
+        self.game.progress.buy_drone()
+        reinforce_drones(self.game)
+        self.assertEqual(len(self.game.drones), 3)
+        self.game.drones.clear()
+        self.game.waves.remaining = 0
+        self.tick()
+        self.assertEqual(len(self.game.drones), 3)
+
+    def test_phoenix_lasts_fifty_simulation_seconds_and_pauses(self):
+        self.game.flow.reward_maneuver(100)
+        self.game.event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_e))
+        self.game.state = "paused"
+        for _ in range(10):
+            self.tick(dt=0.05)
+        self.assertEqual(self.game.phoenix.remaining, 50)
+        self.game.state = "playing"
+        for _ in range(999):
+            self.tick(dt=0.05)
+        self.assertTrue(self.game.phoenix.active)
+        self.tick(dt=0.05)
+        self.assertAlmostEqual(self.game.phoenix.remaining, 0, delta=0.000001)
+        self.assertFalse(self.game.phoenix.active)
+
+    def test_phoenix_attack_fires_powerful_friendly_projectiles(self):
+        self.game.enemies = [enemy_at(self.game.position + pygame.Vector2(300, 0))]
+        self.game.phoenix.activate(self.game.position)
+        self.tick()
+        shots = [shot for shot in self.game.projectiles if shot.owner == "phoenix"]
+        self.assertTrue(shots)
+        self.assertGreater(shots[0].damage, 100)
+
+    def test_guard_repels_enemies_and_intercepts_fast_hostile_shots(self):
+        self.game.phoenix.activate(self.game.position)
+        self.game.phoenix.toggle()
+        enemy = enemy_at(self.game.position + pygame.Vector2(100, 0))
+        self.game.enemies = [enemy]
+        self.game.phoenix.update(self.game, 0.016)
+        self.assertGreater(enemy.position.distance_to(self.game.position), GUARD_RADIUS)
+        self.game.projectiles = [Projectile(self.game.position + pygame.Vector2(-300, 0), pygame.Vector2(12000, 0), 8, "enemy")]
+        self.game.update_projectiles(0.05)
+        self.assertEqual(self.game.health, 100)
+        self.assertEqual(self.game.projectiles, [])
+
+    def test_phoenix_cannot_chain_or_charge_while_active(self):
+        self.game.flow.reward_maneuver(100)
+        self.game.event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_e))
+        self.tick(held(pygame.K_w))
+        self.assertEqual(self.game.flow.energy, 0)
+        remaining = self.game.phoenix.remaining
+        self.game.event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_e))
+        self.assertEqual(self.game.phoenix.remaining, remaining)
+        self.game.event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_b))
+        self.assertEqual(self.game.phoenix.mode, "guard")
+
+    def test_guard_repulsion_stays_inside_the_map_at_a_corner(self):
+        self.game.position.update(40, 40)
+        self.game.phoenix.activate(self.game.position)
+        self.game.phoenix.toggle()
+        enemy = enemy_at((50, 50))
+        self.game.enemies = [enemy]
+        self.game.phoenix.update(self.game, 0.016)
+        self.assertGreater(enemy.position.distance_to(self.game.position), GUARD_RADIUS)
+        self.assertGreaterEqual(enemy.position.x, 60)
+        self.assertGreaterEqual(enemy.position.y, 60)
+
+    def test_hangar_purchase_changes_jet_stats_without_free_healing(self):
+        self.game.health = 50
+        self.game.progress.earn(300)
+        self.game.open_hangar()
+        self.game.hangar_selection = 2  # Vanguard: 145 hull, lower speed.
+        self.game.hangar_purchase()
+        self.assertEqual(self.game.jet.index, 9)
+        self.assertEqual(self.game.flight.max_speed, 350)
+        self.assertEqual(self.game.health, 72.5)
+        self.assertEqual(self.game.progress.coins, 120)
+        self.game.close_hangar()
+        self.assertEqual(self.game.state, "playing")
+        self.game.reset()
+        self.assertEqual(self.game.health, 145)
+        self.assertEqual(self.game.jet.index, 9)
+        self.assertEqual(self.game.progress.coins, 120)
+
+    def test_combat_coin_rewards_are_paid_once_and_persist(self):
+        self.game.enemies = [enemy_at(self.game.position + pygame.Vector2(300, 0), health=0)]
+        self.game.remove_defeated()
+        self.game.remove_defeated()
+        self.assertEqual(self.game.progress.coins, 18)
+        loaded = Progress(self.game.progress.path)
+        self.assertEqual(loaded.coins, 18)
+
+    def test_all_twelve_equipped_jets_render(self):
+        self.game.progress.earn(20000)
+        for index in range(12):
+            self.game.hangar_selection = index
+            self.game.hangar_purchase()
+            self.renderer.draw(self.game)
+            self.assertEqual(self.renderer.player_index, self.game.jet.index)
 
 
 if __name__ == "__main__":

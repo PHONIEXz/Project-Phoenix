@@ -10,15 +10,18 @@ from Game.combat import Enemy, Projectile, MissileLock, guide_missile, hit_fract
 from Game.flight_system import FlightController
 from Game.mission import WaveDirector
 from Game.phoenix_flow import PhoenixFlow
+from Game.progression import Progress, JETS, JET_BY_INDEX
 from Game.renderer import Renderer
+from Game.support import Phoenix, GUARD_RADIUS, reinforce_drones, update_drones
 
 WORLD_SIZE = (3600, 2600)
 PLAYER_RADIUS = 24
-SHIELD_DURATION = 4.0
 
 
 class Game:
-    def __init__(self, screen, seed=None):
+    world_size = WORLD_SIZE
+
+    def __init__(self, screen, seed=None, save_path=None):
         self.screen = screen
         self.rng = random.Random(seed)
         self.visual_rng = random.Random(31)
@@ -26,6 +29,10 @@ class Game:
         self.renderer = Renderer(screen, WORLD_SIZE)
         self.running = True
         self.assist = False
+        self.progress = Progress(save_path)
+        self.hangar_selection = 0
+        self.hangar_return = "menu"
+        self.shop_message = ""
         self.reset()
         self.state = "menu"
 
@@ -35,18 +42,21 @@ class Game:
         self.velocity = pygame.Vector2()
         self.heading = pygame.Vector2(1, 0)
         self.flight = FlightController()
+        self.jet = JET_BY_INDEX[self.progress.selected]
+        self.apply_jet()
         self.flow = PhoenixFlow()
+        self.phoenix = Phoenix()
         self.lock = MissileLock()
         self.waves = WaveDirector()
         self.waves.begin()
-        self.health = 100.0
+        self.health = float(self.jet.hull)
         self.score = 0
         self.time = 0.0
-        self.shield = 0.0
         self.hit_cooldown = 0.0
         self.cannon_cooldown = 0.0
         self.missile_cooldown = 0.0
         self.enemies = []
+        reinforce_drones(self)
         self.projectiles = []
         self.particles = []
         self.rings = []
@@ -58,15 +68,77 @@ class Game:
         self.last_mouse = self.mouse.copy()
         self.state = "playing"
 
+    def apply_jet(self):
+        self.flight.max_speed = self.jet.speed
+        self.flight.acceleration = 520 * self.jet.speed / 420
+        self.flight.boost_max_speed = self.jet.speed + 200
+        self.flight.boost_acceleration = self.flight.acceleration * 1.58
+
+    def open_hangar(self):
+        self.hangar_return = self.state
+        self.state = "hangar"
+        self.hangar_selection = next(i for i, jet in enumerate(JETS) if jet.index == self.progress.selected)
+        self.shop_message = ""
+
+    def close_hangar(self):
+        self.state = self.hangar_return
+        self.last_mouse = pygame.Vector2(pygame.mouse.get_pos())
+
+    def hangar_purchase(self):
+        jet = JETS[self.hangar_selection]
+        if jet.index not in self.progress.owned:
+            success, self.shop_message = self.progress.purchase(jet.index)
+            if not success:
+                return
+        if self.progress.equip(jet.index):
+            ratio = self.health / self.jet.hull
+            self.jet = jet
+            self.apply_jet()
+            # Switching aircraft preserves damage instead of providing free heals.
+            self.health = self.jet.hull * ratio
+            self.shop_message = f"{jet.name} equipped."
+        else:
+            self.shop_message = self.progress.error
+
     def event(self, event):
         if event.type == pygame.QUIT:
             self.running = False
         elif event.type == pygame.WINDOWFOCUSLOST and self.state == "playing":
             self.state = "paused"
+        elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and self.state == "hangar":
+            for index in range(12):
+                if self.renderer.hangar_card(index).collidepoint(event.pos):
+                    self.hangar_selection = index
+                    self.shop_message = ""
+                    break
+            if self.renderer.hangar_buy_button().collidepoint(event.pos):
+                self.hangar_purchase()
+            elif self.renderer.drone_buy_button().collidepoint(event.pos):
+                success, self.shop_message = self.progress.buy_drone()
+                if success:
+                    reinforce_drones(self)
+            elif self.renderer.hangar_back_button().collidepoint(event.pos):
+                self.close_hangar()
         elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and self.state == "menu":
             if pygame.Rect(82, 398, 304, 54).collidepoint(event.pos):
                 self.reset()
         elif event.type == pygame.KEYDOWN:
+            if self.state == "hangar":
+                if event.key in (pygame.K_ESCAPE, pygame.K_h):
+                    self.close_hangar()
+                elif event.key in (pygame.K_LEFT, pygame.K_a):
+                    self.hangar_selection = (self.hangar_selection - 1) % 12
+                    self.shop_message = ""
+                elif event.key in (pygame.K_RIGHT, pygame.K_d):
+                    self.hangar_selection = (self.hangar_selection + 1) % 12
+                    self.shop_message = ""
+                elif event.key == pygame.K_RETURN:
+                    self.hangar_purchase()
+                elif event.key == pygame.K_u:
+                    success, self.shop_message = self.progress.buy_drone()
+                    if success:
+                        reinforce_drones(self)
+                return
             if event.key == pygame.K_m:
                 self.audio.muted = not self.audio.muted
                 if self.audio.muted and pygame.mixer.get_init():
@@ -77,6 +149,8 @@ class Game:
                 self.reset()
             elif event.key == pygame.K_q and self.state == "gameover":
                 self.state = "menu"
+            elif event.key == pygame.K_h:
+                self.open_hangar()
             elif event.key in (pygame.K_p, pygame.K_ESCAPE):
                 if self.state in ("playing", "paused"):
                     self.state = "paused" if self.state == "playing" else "playing"
@@ -85,10 +159,13 @@ class Game:
                     self.running = False
             elif event.key == pygame.K_f and self.state == "playing":
                 self.assist = not self.assist
-            elif event.key == pygame.K_e and self.state == "playing" and self.flow.consume():
-                self.shield = SHIELD_DURATION
-                self.audio.play("ready")
-                self.burst(self.position, (79, 222, 202), 22)
+            elif event.key == pygame.K_b and self.state == "playing":
+                self.phoenix.toggle()
+            elif event.key == pygame.K_e and self.state == "playing" and not self.phoenix.active:
+                if self.flow.consume():
+                    self.phoenix.activate(self.position)
+                    self.audio.play("ready")
+                    self.burst(self.position, (255, 176, 65), 35)
 
     def burst(self, position, color, count=12, size=5):
         for _ in range(count):
@@ -110,8 +187,8 @@ class Game:
             if 90 <= candidate.x <= WORLD_SIZE[0] - 90 and 90 <= candidate.y <= WORLD_SIZE[1] - 90:
                 position = candidate
                 break
-        health = (850 + self.waves.wave * 30) if boss else {"hunter": 65, "flanker": 55, "bomber": 120}[kind] + self.waves.wave * 4
-        speed = {"hunter": 140, "flanker": 185, "bomber": 95, "boss": 90}[kind] + min(65, self.waves.wave * 4)
+        health = (650 + self.waves.wave * 20) if boss else {"hunter": 55, "flanker": 50, "bomber": 100}[kind] + min(60, self.waves.wave * 2.5)
+        speed = {"hunter": 125, "flanker": 160, "bomber": 85, "boss": 80}[kind] + min(45, self.waves.wave * 2.5)
         self.enemies.append(Enemy(position, kind, health, health, speed, phase=self.rng.uniform(0, math.tau), shot_timer=self.rng.uniform(1, 2)))
 
     def update(self, dt, keys, mouse_position, buttons):
@@ -120,7 +197,7 @@ class Game:
             return
         dt = max(0, min(dt, 0.05))
         self.time += dt
-        for attr in ("shield", "hit_cooldown", "cannon_cooldown", "missile_cooldown", "banner_timer"):
+        for attr in ("hit_cooldown", "cannon_cooldown", "missile_cooldown", "banner_timer"):
             setattr(self, attr, max(0, getattr(self, attr) - dt))
         self.shake = max(0, self.shake - dt * 22)
 
@@ -154,6 +231,8 @@ class Game:
             self.particles.append([self.position - self.heading * 25, -self.heading * 95, life, life, color, 7 if self.flight.is_boosting else 4])
 
         self.update_enemies(dt)
+        update_drones(self, dt)
+        self.phoenix.update(self, dt)
         self.lock.update(self.enemies, self.position, self.heading, dt)
         if buttons[0] or self.assist:
             self.fire_cannon()
@@ -161,6 +240,9 @@ class Game:
             self.fire_missile()
         self.update_projectiles(dt)
         self.remove_defeated()
+        if self.phoenix.active:
+            self.flow.energy = 0
+            self.flow.ready = False
         if not was_ready and self.flow.ready:
             self.audio.play("ready")
 
@@ -204,7 +286,7 @@ class Game:
                 angles = (-14, 0, 14) if enemy.kind in ("bomber", "boss") else (0,)
                 for angle in angles:
                     self.projectiles.append(Projectile(enemy.position + toward * 26, direction.rotate(angle) * 370, 8, "enemy", lifetime=2.7))
-                enemy.shot_timer = self.rng.uniform(1.3, 2.1) / (1 + min(0.5, self.waves.wave * 0.035))
+                enemy.shot_timer = self.rng.uniform(1.7, 2.5) / (1 + min(0.25, self.waves.wave * 0.015))
             if distance < enemy.radius + PLAYER_RADIUS:
                 self.damage(12)
                 enemy.position -= toward * 70
@@ -214,8 +296,8 @@ class Game:
             return
         target = select_target(self.enemies, self.position, self.heading, 620, 12)
         direction = (target.position - self.position).normalize() if target else self.heading.copy()
-        self.projectiles.append(Projectile(self.position + self.heading * 34, direction * 1000 + self.velocity * 0.25, 22, "player", lifetime=0.8))
-        self.cannon_cooldown = 0.13
+        self.projectiles.append(Projectile(self.position + self.heading * 34, direction * 1000 + self.velocity * 0.25, self.jet.damage, "player", lifetime=0.8))
+        self.cannon_cooldown = self.jet.interval
         self.burst(self.position + self.heading * 34, (255, 215, 120), 2, 3)
         self.audio.play("cannon")
 
@@ -228,7 +310,7 @@ class Game:
         return True
 
     def damage(self, amount):
-        if self.shield > 0 or self.hit_cooldown > 0:
+        if self.phoenix.guarding or self.hit_cooldown > 0:
             return
         self.health = max(0, self.health - amount)
         self.hit_cooldown = 0.25
@@ -247,7 +329,7 @@ class Game:
             shot.position += shot.velocity * dt
             shot.lifetime -= dt
             hit = False
-            if shot.owner == "player":
+            if shot.owner != "enemy":
                 candidates = []
                 for enemy in self.enemies:
                     fraction = hit_fraction(enemy.position, start, shot.position, enemy.radius + shot.radius)
@@ -261,6 +343,9 @@ class Game:
                     self.burst(shot.position, (255, 192, 101), 7)
                     hit = True
             else:
+                if self.phoenix.guarding and hit_fraction(self.position, start, shot.position, GUARD_RADIUS + shot.radius) is not None:
+                    self.burst(shot.position, (255, 185, 80), 3, 3)
+                    continue
                 # Relative movement catches fast shots even as the jet moves.
                 relative_start = start - self.previous_position
                 relative_end = shot.position - self.position
@@ -283,7 +368,11 @@ class Game:
         for enemy in self.enemies:
             if enemy.health <= 0:
                 self.score += 1000 if enemy.kind == "boss" else 100
-                self.flow.reward_maneuver(3, 0.05)
+                self.progress.earn(150 if enemy.kind == "boss" else 18)
+                if self.phoenix.active:
+                    self.flow.reward_maneuver(0, 0.05)
+                else:
+                    self.flow.reward_maneuver(8, 0.05)
                 self.burst(enemy.position, (255, 169, 83), 32 if enemy.kind == "boss" else 19, 8)
                 self.rings.append((enemy.position.copy(), 0))
                 self.shake = max(self.shake, 4)
@@ -300,13 +389,16 @@ class Game:
         if action == "spawn":
             self.spawn_enemy()
         elif action == "clear":
-            self.health = min(100, self.health + 12)
-            self.projectiles = [shot for shot in self.projectiles if shot.owner == "player"]
-            self.banner = "SECTOR CLEAR / HULL REPAIRED +12"
+            self.health = min(self.jet.hull, self.health + 22)
+            self.progress.earn(25 + self.waves.wave * 5)
+            self.projectiles = [shot for shot in self.projectiles if shot.owner != "enemy"]
+            reinforce_drones(self)
+            self.banner = "SECTOR CLEAR / +22 HULL / COINS AWARDED"
             self.banner_timer = 3
             self.audio.play("ready")
         elif action == "next":
             self.waves.begin()
+            reinforce_drones(self)
             self.banner = f"WAVE {self.waves.wave:02d} / {'BOSS INBOUND' if self.waves.wave % 9 == 0 else 'NEW CONTACTS'}"
             self.banner_timer = 2.5
 
@@ -330,6 +422,7 @@ def main():
             game.renderer.draw(game)
             pygame.display.flip()
     finally:
+        game.progress.save()
         pygame.mouse.set_visible(True)
         pygame.quit()
 

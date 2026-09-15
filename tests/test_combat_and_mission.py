@@ -77,7 +77,7 @@ class MissionTests(unittest.TestCase):
         self.assertIsNone(waves.update(0.016, 1))
         self.assertEqual(waves.update(0.016, 0), "clear")
         self.assertIsNone(waves.update(1, 0))
-        self.assertEqual(waves.update(3, 0), "next")
+        self.assertEqual(waves.update(5, 0), "next")
 
 
 class AudioTests(unittest.TestCase):

@@ -11,7 +11,7 @@ class WaveDirector:
 
     def begin(self):
         self.wave += 1
-        self.total = min(24, 3 + self.wave * 2)
+        self.total = min(20, 3 + self.wave)
         self.remaining = self.total
         self.spawn_timer = 0.0
         self.intermission = 0.0
@@ -24,12 +24,12 @@ class WaveDirector:
             return "next" if self.intermission <= 0 else None
         if self.remaining == 0 and alive == 0:
             self.cleared = True
-            self.intermission = 3.5
+            self.intermission = 6.0
             return "clear"
         self.spawn_timer -= dt
-        if self.remaining > 0 and self.spawn_timer <= 0 and alive < min(8, 3 + self.wave):
+        if self.remaining > 0 and self.spawn_timer <= 0 and alive < min(6, 2 + (self.wave + 1) // 2):
             self.remaining -= 1
-            self.spawn_timer = max(0.45, 1.05 - self.wave * 0.04)
+            self.spawn_timer = max(0.75, 1.35 - self.wave * 0.025)
             # Spawns are spaced even when there is capacity for multiple jets.
             return "spawn"
         return None

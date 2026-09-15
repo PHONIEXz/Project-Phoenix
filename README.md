@@ -42,7 +42,9 @@ On Windows, activate with `.venv\Scripts\activate`.
 | Left mouse | Hold to fire the cannon |
 | Right mouse / Space | Launch a missile after acquiring a target lock |
 | F | Toggle automatic weapon assist |
-| E | Spend full Phoenix energy on a four-second shield |
+| E | Spend full Phoenix energy to summon the bird for 50 seconds |
+| B | Switch Phoenix between Attack and Guard modes |
+| H | Open the hangar; gameplay pauses while shopping |
 | M | Mute or unmute effects |
 | P / Esc | Pause or resume |
 | R after defeat | Restart |
@@ -52,11 +54,36 @@ The cannon assists within a narrow 12-degree half-angle and 620-pixel targeting 
 
 ## Missions and Phoenix Flow
 
-Clear all incoming aircraft to finish a wave. A 3.5-second repair break restores up to 12 hull points, then the next wave begins. Waves grow to at most 24 total enemies, with no more than eight active at once. Every ninth wave starts with a boss. Hunters weave, flankers circle, and bombers fire spread shots.
+Clear all incoming aircraft to finish a wave. A six-second repair break restores up to 22 hull points, then the next wave begins. Waves grow to at most 20 total enemies, with no more than six active at once. Every ninth wave starts with a boss. Hunters weave, flankers circle, and bombers fire spread shots.
 
-Fast flying slowly builds Phoenix energy. Close evades and defeated aircraft build energy and a Flow multiplier up to x3. Damage breaks Flow. Full energy powers a temporary shield against hostile shots and contact damage. Defeated aircraft award 100 score; a boss awards 1,000.
+Fast flying slowly builds Phoenix energy. Close evades and defeated aircraft build energy and a Flow multiplier up to x3. Damage breaks Flow. Full energy summons Phoenix for 50 seconds of simulation time. Attack mode hunts aircraft with powerful homing fire. Guard mode creates a 185-pixel no-go area, repels enemies, intercepts hostile shots, and protects against contact damage. Press B to switch modes before or during activation. The timer freezes while paused or in the hangar; Phoenix energy cannot rebuild while the bird is active. Defeated aircraft award 100 score; a boss awards 1,000.
 
 The radar maps the whole sector and red edge arrows point toward offscreen aircraft. Losing window focus pauses play automatically. Banking currently changes lateral acceleration without tilting the sprite.
+
+## Coins, aircraft, and drone support
+
+Coins are earned through play, without real-money purchases. A regular aircraft awards 18 coins, a boss awards 150, and a cleared wave awards 25 + 5 x wave number. Coins, owned aircraft, the equipped jet, and purchased drone slots survive defeat and new sorties.
+
+Press H for the hangar. Click a jet card or use A/D to select it, then click Buy/Equip or press Enter. Jet roles trade hull, speed, and cannon strength. Equipping during a sortie preserves the percentage of hull remaining, so changing jets cannot provide free repairs. New sorties start with the equipped jet at full hull.
+
+| Ship | Jet | Role | Coin price |
+| --- | --- | --- | --- |
+| 0011 | Ember | Balanced | Free |
+| 0010 | Swift | Scout | 120 |
+| 0009 | Vanguard | Heavy | 180 |
+| 0008 | Talon | Striker | 250 |
+| 0007 | Bulwark | Guardian | 330 |
+| 0006 | Comet | Interceptor | 420 |
+| 0005 | Striker | Assault | 520 |
+| 0004 | Sentinel | Heavy | 650 |
+| 0003 | Wraith | Interceptor | 780 |
+| 0002 | Tempest | Striker | 950 |
+| 0001 | Aegis | Guardian | 1150 |
+| 0000 | Sunflare | Balanced | 1400 |
+
+Every sortie has one free, invulnerable escort drone. It orbits the player and automatically fires at nearby aircraft. Buy two additional permanent drone slots for 350 and 750 coins using U or the hangar button. All unlocked drones arrive again each wave; their firepower grows with the wave number, up to a cap.
+
+Progress is saved atomically after rewards and purchases in `Data/progress.json`, which is excluded from Git. Save errors appear in the HUD or hangar. Purchases roll back if saving fails. An unreadable existing save is preserved; back it up before repairing or moving it to start fresh. Tests use temporary save locations and never spend your actual game coins.
 
 ## Checks
 
@@ -64,6 +91,6 @@ The radar maps the whole sector and red edge arrows point toward offscreen aircr
 python -m unittest discover -s tests -v
 ```
 
-The suite covers flight, boost, energy, cone targeting, missile lock and guidance, swept collisions, wave pacing, bosses, shield protection, pause, defeat, restart, optional audio, and all display states. SDL's dummy display runs these checks without opening a window.
+The suite covers flight, boost, energy, targeting and missile guidance, swept collisions, wave pacing, bosses, drones, both Phoenix modes, hangar interactions, all aircraft, atomic progress saves, purchase validation, pause, defeat, restart, optional audio, and all display states. SDL's dummy display runs these checks without opening a window.
 
 Scenery and effects are generated in code. Aircraft use the existing Kenney ship assets. No extra images, sounds, network services, or paid dependencies are required. Local playtesting is still needed to assess flight feel and difficulty on your device.
