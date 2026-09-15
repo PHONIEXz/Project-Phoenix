@@ -1,1105 +1,338 @@
-import pygame
+"""Project Phoenix: launch this file for the arcade flight game."""
+
 import math
 import random
-from pathlib import Path
+import pygame
 
 from GameSettings import SCREEN_WIDTH, SCREEN_HEIGHT, FPS, GAME_TITLE
+from Game.audio import Audio
+from Game.combat import Enemy, Projectile, MissileLock, guide_missile, hit_fraction, segment_distance, select_target
 from Game.flight_system import FlightController
+from Game.mission import WaveDirector
 from Game.phoenix_flow import PhoenixFlow
-
-
-# PROJECT PATH
-
-BASE_DIR = Path(__file__).resolve().parent
-
-PLAYER_IMAGE_PATH = (
-    BASE_DIR
-    / "Assets"
-    / "Jets"
-    / "Ships"
-    / "ship_0011.png"
-)
-
-
-# PYGAME SETUP
-
-pygame.init()
-
-screen = pygame.display.set_mode(
-    (SCREEN_WIDTH, SCREEN_HEIGHT)
-)
-
-pygame.display.set_caption(GAME_TITLE)
-
-clock = pygame.time.Clock()
-
-
-# PLAYER
-
-player_image = pygame.image.load(
-    str(PLAYER_IMAGE_PATH)
-).convert_alpha()
-
-player_position = pygame.Vector2(
-    SCREEN_WIDTH // 2,
-    SCREEN_HEIGHT // 2
-)
-
-player_velocity = pygame.Vector2(0, 0)
-
-player_rect = player_image.get_rect(
-    center=player_position
-)
-
-flight = FlightController()
-flow = PhoenixFlow()
-hud_font = pygame.font.Font(None, 23)
-title_font = pygame.font.Font(None, 48)
-PHOENIX_SHIELD_DURATION = 4.0
-phoenix_shield_timer = 0.0
-engine_trails = []
-paused = False
-score = 0
-current_time = 0.0
-
-PLAYER_MAX_HEALTH = 100
-player_health = PLAYER_MAX_HEALTH
-
-
-# PHOENIX ENERGY / NEAR MISS SYSTEM
-
-PHOENIX_NEAR_MISS_GAIN = 12
-
-# How close a hostile shot must pass to count as a near miss.
-NEAR_MISS_RADIUS = 48
-
-near_miss_flash_timer = 0
-NEAR_MISS_FLASH_TIME = 0.22
-
-
-# PLAYER AIMING
-
-last_mouse_position = pygame.Vector2(
-    pygame.mouse.get_pos()
-)
-
-aim_direction = pygame.Vector2(1, 0)
-
-MOUSE_AIM_THRESHOLD = 2
-
-
-# PLAYER COMBAT SETTINGS
-
-CANNON_RANGE = 260
-MISSILE_RANGE = 340
-
-FIRE_HALF_ANGLE = 45
-
-BULLET_SPEED = 700
-BULLET_DAMAGE = 20
-BULLET_COOLDOWN = 0.22
-
-MISSILE_SPEED = 320
-MISSILE_DAMAGE = 60
-MISSILE_COOLDOWN = 1.8
-
-last_bullet_time = 0
-last_missile_time = 0
-
-
-# ENEMY SETTINGS
-
-MAX_ENEMIES = 4
-ENEMY_HEALTH = 100
-
-ENEMY_STOP_DISTANCE = 170
-
-RESPAWN_DELAY = 1.4
-last_respawn_time = 0
-
-ENEMY_SHOOT_RANGE = 300
-ENEMY_BULLET_SPEED = 360
-ENEMY_BULLET_DAMAGE = 8
-
-ENEMY_BULLET_COOLDOWN_MIN = 1.0
-ENEMY_BULLET_COOLDOWN_MAX = 1.8
-
-
-# GAME OBJECTS
-
-enemies = []
-bullets = []
-missiles = []
-enemy_bullets = []
-
-
-def spawn_enemy():
-
-    side = random.choice(
-        ["top", "bottom", "left", "right"]
-    )
-
-    margin = 50
-
-    if side == "top":
-
-        position = (
-            random.randint(
-                margin,
-                SCREEN_WIDTH - margin
-            ),
-            -40
-        )
-
-    elif side == "bottom":
-
-        position = (
-            random.randint(
-                margin,
-                SCREEN_WIDTH - margin
-            ),
-            SCREEN_HEIGHT + 40
-        )
-
-    elif side == "left":
-
-        position = (
-            -40,
-            random.randint(
-                margin,
-                SCREEN_HEIGHT - margin
-            )
-        )
-
-    else:
-
-        position = (
-            SCREEN_WIDTH + 40,
-            random.randint(
-                margin,
-                SCREEN_HEIGHT - margin
-            )
-        )
-
-    enemy = {
-        "pos": pygame.Vector2(position),
-
-        "rect": pygame.Rect(
-            0,
-            0,
-            55,
-            55
-        ),
-
-        "speed": random.randint(
-            75,
-            115
-        ),
-
-        "health": ENEMY_HEALTH,
-
-        "last_shot": 0,
-
-        "shoot_cooldown": random.uniform(
-            ENEMY_BULLET_COOLDOWN_MIN,
-            ENEMY_BULLET_COOLDOWN_MAX
-        ),
-    }
-
-    enemy["rect"].center = position
-
-    enemies.append(enemy)
-
-
-# INITIAL ENEMIES
-
-for _ in range(MAX_ENEMIES):
-    spawn_enemy()
-
-
-# MAIN GAME LOOP
-
-screen.fill((10, 15, 25))
-frozen_frame = screen.copy()
-
-running = True
-
-while running:
-
-    # TIME
-
-    dt = min(clock.tick(FPS) / 1000, 0.05)
-
-    # EVENTS
-    for event in pygame.event.get():
+from Game.renderer import Renderer
+
+WORLD_SIZE = (3600, 2600)
+PLAYER_RADIUS = 24
+SHIELD_DURATION = 4.0
+
+
+class Game:
+    def __init__(self, screen, seed=None):
+        self.screen = screen
+        self.rng = random.Random(seed)
+        self.visual_rng = random.Random(31)
+        self.audio = Audio()
+        self.renderer = Renderer(screen, WORLD_SIZE)
+        self.running = True
+        self.assist = False
+        self.reset()
+        self.state = "menu"
+
+    def reset(self):
+        self.position = pygame.Vector2(1700, 1280)
+        self.previous_position = self.position.copy()
+        self.velocity = pygame.Vector2()
+        self.heading = pygame.Vector2(1, 0)
+        self.flight = FlightController()
+        self.flow = PhoenixFlow()
+        self.lock = MissileLock()
+        self.waves = WaveDirector()
+        self.waves.begin()
+        self.health = 100.0
+        self.score = 0
+        self.time = 0.0
+        self.shield = 0.0
+        self.hit_cooldown = 0.0
+        self.cannon_cooldown = 0.0
+        self.missile_cooldown = 0.0
+        self.enemies = []
+        self.projectiles = []
+        self.particles = []
+        self.rings = []
+        self.shake = 0.0
+        self.camera = self.position - pygame.Vector2(self.screen.get_width() / 2, self.screen.get_height() / 2)
+        self.banner = "WAVE 01 / CLEAR THE SECTOR"
+        self.banner_timer = 2.5
+        self.mouse = pygame.Vector2(pygame.mouse.get_pos())
+        self.last_mouse = self.mouse.copy()
+        self.state = "playing"
+
+    def event(self, event):
         if event.type == pygame.QUIT:
-            running = False
+            self.running = False
+        elif event.type == pygame.WINDOWFOCUSLOST and self.state == "playing":
+            self.state = "paused"
+        elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and self.state == "menu":
+            if pygame.Rect(82, 398, 304, 54).collidepoint(event.pos):
+                self.reset()
         elif event.type == pygame.KEYDOWN:
-            if event.key in (pygame.K_ESCAPE, pygame.K_p) and player_health > 0:
-                paused = not paused
-                last_mouse_position = pygame.Vector2(pygame.mouse.get_pos())
-            elif event.key == pygame.K_e and not paused and player_health > 0:
-                if flow.consume():
-                    phoenix_shield_timer = PHOENIX_SHIELD_DURATION
-            elif event.key == pygame.K_r and player_health <= 0:
-                player_position.update(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2)
-                player_velocity.update(0, 0)
-                player_rect.center = player_position
-                aim_direction.update(1, 0)
-                last_mouse_position = pygame.Vector2(pygame.mouse.get_pos())
-                player_health = PLAYER_MAX_HEALTH
-                flight = FlightController()
-                flow = PhoenixFlow()
-                phoenix_shield_timer = 0.0
-                near_miss_flash_timer = 0.0
-                score = 0
-                current_time = 0.0
-                last_bullet_time = last_missile_time = last_respawn_time = 0.0
-                enemies.clear()
-                bullets.clear()
-                missiles.clear()
-                enemy_bullets.clear()
-                engine_trails.clear()
-                for _ in range(MAX_ENEMIES):
-                    spawn_enemy()
-                paused = False
-
-    if not running:
-        break
-
-    # Freeze the simulation clock while paused or after defeat.
-    if paused or player_health <= 0:
-        screen.blit(frozen_frame, (0, 0))
-        shade = pygame.Surface(screen.get_size(), pygame.SRCALPHA)
-        shade.fill((5, 10, 20, 190))
-        screen.blit(shade, (0, 0))
-        message = "PAUSED" if paused else "FLIGHT ENDED"
-        hint = "P / Esc to resume" if paused else "R to restart"
-        title = title_font.render(message, True, (255, 220, 120))
-        text = hud_font.render(hint, True, (230, 235, 245))
-        screen.blit(title, title.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 20)))
-        screen.blit(text, text.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 + 25)))
-        pygame.display.flip()
-        continue
-
-    current_time += dt
-    near_miss_flash_timer = max(0.0, near_miss_flash_timer - dt)
-    phoenix_shield_timer = max(0.0, phoenix_shield_timer - dt)
-
-    # MOUSE AIMING
-
-    current_mouse_position = pygame.Vector2(
-        pygame.mouse.get_pos()
-    )
-
-    mouse_movement = (
-        current_mouse_position
-        - last_mouse_position
-    )
-
-    if (
-        mouse_movement.length()
-        >= MOUSE_AIM_THRESHOLD
-    ):
-
-        new_aim_direction = (
-            current_mouse_position
-            - player_position
-        )
-
-        if new_aim_direction.length() != 0:
-
-            aim_direction = (
-                new_aim_direction.normalize()
-            )
-
-        last_mouse_position = (
-            current_mouse_position
-        )
-
-
-    # FLIGHT MODEL V2: thrust, braking, lateral banking and afterburner.
-    keys = pygame.key.get_pressed()
-    player_velocity = flight.update(player_velocity, aim_direction, keys, dt)
-
-    # MOVE PLAYER
-
-    player_position += (
-        player_velocity
-        * dt
-    )
-
-
-    # SCREEN BOUNDARIES
-
-    half_width = player_rect.width / 2
-    half_height = player_rect.height / 2
-
-    if player_position.x < half_width:
-
-        player_position.x = half_width
-        player_velocity.x = max(
-            0,
-            player_velocity.x
-        )
-
-    if (
-        player_position.x
-        > SCREEN_WIDTH - half_width
-    ):
-
-        player_position.x = (
-            SCREEN_WIDTH - half_width
-        )
-
-        player_velocity.x = min(
-            0,
-            player_velocity.x
-        )
-
-    if player_position.y < half_height:
-
-        player_position.y = half_height
-        player_velocity.y = max(
-            0,
-            player_velocity.y
-        )
-
-    if (
-        player_position.y
-        > SCREEN_HEIGHT - half_height
-    ):
-
-        player_position.y = (
-            SCREEN_HEIGHT - half_height
-        )
-
-        player_velocity.y = min(
-            0,
-            player_velocity.y
-        )
-
-
-    # ROTATE PLAYER
-
-    angle = math.degrees(
-        math.atan2(
-            -aim_direction.y,
-            aim_direction.x
-        )
-    )
-
-    rotated_player = (
-        pygame.transform.rotate(
-            player_image,
-            angle - 90  # Kenney ship artwork points up by default.
-        )
-    )
-
-    rotated_rect = (
-        rotated_player.get_rect(
-            center=(
-                round(player_position.x),
-                round(player_position.y)
-            )
-        )
-    )
-
-    player_rect.center = (
-        round(player_position.x),
-        round(player_position.y)
-    )
-
-
-    flow.update(dt, player_velocity.length(), flight.max_speed, flight.is_boosting)
-
-    # Short engine trails show momentum and make boost easy to read.
-    engine_trails = [(pos, life - dt, boosted) for pos, life, boosted in engine_trails if life > dt]
-    if keys[pygame.K_w] or keys[pygame.K_UP]:
-        engine_trails.append((player_position - aim_direction * 14, 0.3, flight.is_boosting))
-
-    # ENEMY MOVEMENT
-
-    for enemy in enemies:
-
-        to_player = (
-            player_position
-            - enemy["pos"]
-        )
-
-        distance_to_player = (
-            to_player.length()
-        )
-
-        if (
-            distance_to_player
-            > ENEMY_STOP_DISTANCE
-            and distance_to_player != 0
-        ):
-
-            enemy_direction = (
-                to_player.normalize()
-            )
-
-            enemy["pos"] += (
-                enemy_direction
-                * enemy["speed"]
-                * dt
-            )
-
-        enemy["rect"].center = (
-            round(enemy["pos"].x),
-            round(enemy["pos"].y)
-        )
-
-
-    # ENEMY SHOOTING
-
-    for enemy in enemies:
-
-        to_player = (
-            player_position
-            - enemy["pos"]
-        )
-
-        distance_to_player = (
-            to_player.length()
-        )
-
-        if (
-            distance_to_player
-            <= ENEMY_SHOOT_RANGE
-            and distance_to_player != 0
-        ):
-
-            if (
-                current_time
-                - enemy["last_shot"]
-                >= enemy["shoot_cooldown"]
-            ):
-
-                shot_direction = (
-                    to_player.normalize()
-                )
-
-                enemy_bullets.append(
-                    {
-                        "pos": pygame.Vector2(
-                            enemy["pos"]
-                        ),
-
-                        "direction": shot_direction,
-
-                        # Prevents one projectile from
-                        # rewarding repeated near misses.
-                        "near_miss_awarded": False,
-                    }
-                )
-
-                enemy["last_shot"] = (
-                    current_time
-                )
-
-                enemy["shoot_cooldown"] = (
-                    random.uniform(
-                        ENEMY_BULLET_COOLDOWN_MIN,
-                        ENEMY_BULLET_COOLDOWN_MAX
-                    )
-                )
-
-
-    # FIND TARGETS IN FRONT
-
-    cannon_target = None
-    cannon_target_distance = CANNON_RANGE
-
-    missile_target = None
-    missile_target_distance = MISSILE_RANGE
-
-    for enemy in enemies:
-
-        to_enemy = (
-            enemy["pos"]
-            - player_position
-        )
-
-        distance = to_enemy.length()
-
-        if distance == 0:
-            continue
-
-        enemy_direction = (
-            to_enemy.normalize()
-        )
-
-        dot = max(
-            -1,
-            min(
-                1,
-                aim_direction.dot(
-                    enemy_direction
-                )
-            )
-        )
-
-        angle_to_enemy = (
-            math.degrees(
-                math.acos(dot)
-            )
-        )
-
-        if (
-            distance < cannon_target_distance
-            and angle_to_enemy
-            <= FIRE_HALF_ANGLE
-        ):
-
-            cannon_target_distance = distance
-            cannon_target = enemy
-
-        if (
-            distance < missile_target_distance
-            and angle_to_enemy
-            <= FIRE_HALF_ANGLE
-        ):
-
-            missile_target_distance = distance
-            missile_target = enemy
-
-
-    # AUTOMATIC CANNON
-
-    if cannon_target is not None:
-
-        if (
-            current_time
-            - last_bullet_time
-            >= BULLET_COOLDOWN
-        ):
-
-            bullet_position = (
-                pygame.Vector2(
-                    player_position
-                )
-            )
-
-            bullet_direction = (
-                cannon_target["pos"]
-                - bullet_position
-            )
-
-            if bullet_direction.length() != 0:
-
-                bullet_direction = (
-                    bullet_direction.normalize()
-                )
-
-                bullets.append(
-                    {
-                        "pos": bullet_position,
-                        "direction": bullet_direction,
-                    }
-                )
-
-                last_bullet_time = current_time
-
-
-    # HOMING MISSILE
-
-    if missile_target is not None:
-
-        if (
-            current_time
-            - last_missile_time
-            >= MISSILE_COOLDOWN
-        ):
-
-            missiles.append(
-                {
-                    "pos": pygame.Vector2(
-                        player_position
-                    ),
-
-                    "target": missile_target,
-                }
-            )
-
-            last_missile_time = current_time
-
-
-    # PLAYER BULLETS
-
-    for bullet in bullets[:]:
-
-        bullet["pos"] += (
-            bullet["direction"]
-            * BULLET_SPEED
-            * dt
-        )
-
-        bullet_rect = pygame.Rect(
-            round(bullet["pos"].x) - 4,
-            round(bullet["pos"].y) - 4,
-            8,
-            8
-        )
-
-        hit_enemy = None
-
-        for enemy in enemies:
-
-            if bullet_rect.colliderect(
-                enemy["rect"]
-            ):
-
-                hit_enemy = enemy
+            if event.key == pygame.K_m:
+                self.audio.muted = not self.audio.muted
+                if self.audio.muted and pygame.mixer.get_init():
+                    pygame.mixer.stop()
+            elif event.key == pygame.K_RETURN and self.state == "menu":
+                self.reset()
+            elif event.key == pygame.K_r and self.state == "gameover":
+                self.reset()
+            elif event.key == pygame.K_q and self.state == "gameover":
+                self.state = "menu"
+            elif event.key in (pygame.K_p, pygame.K_ESCAPE):
+                if self.state in ("playing", "paused"):
+                    self.state = "paused" if self.state == "playing" else "playing"
+                    self.last_mouse = pygame.Vector2(pygame.mouse.get_pos())
+                elif self.state == "menu" and event.key == pygame.K_ESCAPE:
+                    self.running = False
+            elif event.key == pygame.K_f and self.state == "playing":
+                self.assist = not self.assist
+            elif event.key == pygame.K_e and self.state == "playing" and self.flow.consume():
+                self.shield = SHIELD_DURATION
+                self.audio.play("ready")
+                self.burst(self.position, (79, 222, 202), 22)
+
+    def burst(self, position, color, count=12, size=5):
+        for _ in range(count):
+            velocity = pygame.Vector2(1, 0).rotate(self.visual_rng.uniform(0, 360)) * self.visual_rng.uniform(35, 220)
+            life = self.visual_rng.uniform(0.2, 0.65)
+            self.particles.append([position.copy(), velocity, life, life, color, size])
+        self.particles = self.particles[-450:]
+
+    def spawn_enemy(self):
+        boss = self.waves.wave % 9 == 0 and self.waves.remaining == self.waves.total - 1
+        kinds = ["hunter"] if self.waves.wave == 1 else ["hunter", "flanker", "bomber"]
+        kind = "boss" if boss else self.rng.choice(kinds)
+        # Reject out-of-map spawns instead of clamping them onto a nearby jet.
+        corners = [pygame.Vector2(x, y) for x in (90, WORLD_SIZE[0] - 90) for y in (90, WORLD_SIZE[1] - 90)]
+        position = max(corners, key=lambda point: point.distance_squared_to(self.position))
+        for _ in range(32):
+            angle = self.rng.uniform(0, math.tau)
+            candidate = self.position + pygame.Vector2(math.cos(angle), math.sin(angle)) * self.rng.uniform(650, 900)
+            if 90 <= candidate.x <= WORLD_SIZE[0] - 90 and 90 <= candidate.y <= WORLD_SIZE[1] - 90:
+                position = candidate
                 break
-
-        if hit_enemy is not None:
-
-            hit_enemy["health"] -= (
-                BULLET_DAMAGE
-            )
-
-            bullets.remove(bullet)
-
-        elif not screen.get_rect().colliderect(
-            bullet_rect
-        ):
-
-            bullets.remove(bullet)
-
-
-    # MISSILES
-
-    for missile in missiles[:]:
-
-        target = missile["target"]
-
-        if target not in enemies:
-
-            missiles.remove(missile)
-            continue
-
-        missile_direction = (
-            target["pos"]
-            - missile["pos"]
-        )
-
-        if missile_direction.length() != 0:
-
-            missile_direction = (
-                missile_direction.normalize()
-            )
-
-            missile["pos"] += (
-                missile_direction
-                * MISSILE_SPEED
-                * dt
-            )
-
-        missile_rect = pygame.Rect(
-            round(missile["pos"].x) - 7,
-            round(missile["pos"].y) - 7,
-            14,
-            14
-        )
-
-        if missile_rect.colliderect(
-            target["rect"]
-        ):
-
-            target["health"] -= (
-                MISSILE_DAMAGE
-            )
-
-            missiles.remove(missile)
-
-
-    # ENEMY BULLETS + NEAR MISS DETECTION
-
-    for enemy_bullet in enemy_bullets[:]:
-
-        enemy_bullet["pos"] += (
-            enemy_bullet["direction"]
-            * ENEMY_BULLET_SPEED
-            * dt
-        )
-
-        enemy_bullet_rect = pygame.Rect(
-            round(
-                enemy_bullet["pos"].x
-            ) - 5,
-
-            round(
-                enemy_bullet["pos"].y
-            ) - 5,
-
-            10,
-            10
-        )
-
-
-        # DIRECT HIT
-
-        if enemy_bullet_rect.colliderect(
-            player_rect
-        ):
-
-            if phoenix_shield_timer <= 0:
-                player_health -= ENEMY_BULLET_DAMAGE
-                flow.break_flow()
-
-            player_health = max(
-                0,
-                player_health
-            )
-
-            enemy_bullets.remove(
-                enemy_bullet
-            )
-
-            continue
-
-
-        # NEAR MISS
-
-        distance_from_player = (
-            enemy_bullet["pos"]
-            .distance_to(
-                player_position
-            )
-        )
-
-        if (
-            distance_from_player
-            <= NEAR_MISS_RADIUS
-            and (enemy_bullet["pos"] - player_position).dot(enemy_bullet["direction"]) > 0
-            and not enemy_bullet[
-                "near_miss_awarded"
-            ]
-        ):
-
-            flow.reward_maneuver(PHOENIX_NEAR_MISS_GAIN)
-
-            enemy_bullet[
-                "near_miss_awarded"
-            ] = True
-
-            near_miss_flash_timer = (
-                NEAR_MISS_FLASH_TIME
-            )
-
-
-        # REMOVE OFFSCREEN BULLETS
-
-        if not screen.get_rect().colliderect(
-            enemy_bullet_rect
-        ):
-
-            enemy_bullets.remove(
-                enemy_bullet
-            )
-
-
-    # REMOVE DEFEATED ENEMIES
-
-    for enemy in enemies[:]:
-
-        if enemy["health"] <= 0:
-
-            enemies.remove(enemy)
-            score += 100
-
-
-    # RESPAWN ENEMIES
-
-    if (
-        len(enemies) < MAX_ENEMIES
-        and current_time
-        - last_respawn_time
-        >= RESPAWN_DELAY
-    ):
-
-        spawn_enemy()
-
-        last_respawn_time = (
-            current_time
-        )
-
-
-    # DRAW
-
-    screen.fill(
-        (10, 15, 25)
-    )
-
-
-    for trail_pos, life, boosted in engine_trails:
-        color = (255, 160, 50) if boosted else (80, 160, 220)
-        color = tuple(round(channel * life / 0.3) for channel in color)
-        pygame.draw.circle(screen, color, trail_pos, max(1, round(life * (20 if boosted else 12))))
-
-    # CANNON RANGE
-
-    pygame.draw.circle(
-        screen,
-        (40, 70, 90),
-        (
-            round(player_position.x),
-            round(player_position.y)
-        ),
-        CANNON_RANGE,
-        1
-    )
-
-
-    # NEAR MISS RING
-    # Visible only briefly when a near miss succeeds.
-
-    if near_miss_flash_timer > 0:
-
-        pygame.draw.circle(
-            screen,
-            (255, 150, 40),
-            (
-                round(player_position.x),
-                round(player_position.y)
-            ),
-            NEAR_MISS_RADIUS,
-            2
-        )
-
-
-    # ENEMIES
-
-    for enemy in enemies:
-
-        pygame.draw.rect(
-            screen,
-            (200, 50, 50),
-            enemy["rect"]
-        )
-
-        health_width = int(
-            55
-            * max(
-                enemy["health"],
-                0
-            )
-            / ENEMY_HEALTH
-        )
-
-        pygame.draw.rect(
-            screen,
-            (60, 60, 60),
-            (
-                enemy["rect"].x,
-                enemy["rect"].y - 10,
-                55,
-                5
-            )
-        )
-
-        pygame.draw.rect(
-            screen,
-            (50, 200, 80),
-            (
-                enemy["rect"].x,
-                enemy["rect"].y - 10,
-                health_width,
-                5
-            )
-        )
-
-
-    # TARGET LOCK
-
-    active_target = (
-        cannon_target
-        or missile_target
-    )
-
-    if active_target is not None:
-
-        lock_rect = (
-            active_target["rect"]
-            .inflate(
-                18,
-                18
-            )
-        )
-
-        pygame.draw.rect(
-            screen,
-            (255, 220, 80),
-            lock_rect,
-            2
-        )
-
-
-    # PLAYER BULLETS
-
-    for bullet in bullets:
-
-        pygame.draw.circle(
-            screen,
-            (240, 240, 120),
-            (
-                round(
-                    bullet["pos"].x
-                ),
-
-                round(
-                    bullet["pos"].y
-                )
-            ),
-            4
-        )
-
-
-    # MISSILES
-
-    for missile in missiles:
-
-        pygame.draw.circle(
-            screen,
-            (255, 120, 40),
-            (
-                round(
-                    missile["pos"].x
-                ),
-
-                round(
-                    missile["pos"].y
-                )
-            ),
-            7
-        )
-
-
-    # ENEMY BULLETS
-
-    for enemy_bullet in enemy_bullets:
-
-        pygame.draw.circle(
-            screen,
-            (255, 80, 80),
-            (
-                round(
-                    enemy_bullet["pos"].x
-                ),
-
-                round(
-                    enemy_bullet["pos"].y
-                )
-            ),
-            5
-        )
-
-
-    # PLAYER
-
-    screen.blit(
-        rotated_player,
-        rotated_rect
-    )
-
-
-    if phoenix_shield_timer > 0:
-        pygame.draw.circle(screen, (255, 190, 70), player_rect.center, 30, 3)
-
-    # PLAYER HEALTH BAR
-
-    health_bar_width = 220
-
-    health_ratio = (
-        player_health
-        / PLAYER_MAX_HEALTH
-    )
-
-    pygame.draw.rect(
-        screen,
-        (55, 55, 55),
-        (
-            20,
-            20,
-            health_bar_width,
-            18
-        )
-    )
-
-    pygame.draw.rect(
-        screen,
-        (60, 210, 90),
-        (
-            20,
-            20,
-            int(
-                health_bar_width
-                * health_ratio
-            ),
-            18
-        )
-    )
-
-
-    # PHOENIX ENERGY BAR
-
-    energy_bar_width = 220
-
-    energy_ratio = (
-        flow.energy_ratio
-    )
-
-    pygame.draw.rect(
-        screen,
-        (55, 55, 55),
-        (
-            20,
-            50,
-            energy_bar_width,
-            14
-        )
-    )
-
-    pygame.draw.rect(
-        screen,
-        (255, 140, 40),
-        (
-            20,
-            50,
-            int(
-                energy_bar_width
-                * energy_ratio
-            ),
-            14
-        )
-    )
-
-
-    # FLIGHT HUD
-    hud_lines = [
-        ("HULL", (250, 250, 250), (250, 20)),
-        (f"{flow.state_name}  |  Flow x{flow.flow:.1f}", (255, 180, 70), (250, 48)),
-        (f"BOOST {flight.boost_energy:.0f}%", (100, 200, 255), (250, 77)),
-        (f"SPEED {player_velocity.length():.0f}   SCORE {score}", (220, 230, 240), (20, 106)),
-        ("Mouse aim | W/Up thrust | S/Down brake | A/D bank | Shift + thrust boost", (170, 190, 210), (20, SCREEN_HEIGHT - 47)),
-        ("E Phoenix shield (full energy) | P/Esc pause", (170, 190, 210), (20, SCREEN_HEIGHT - 25)),
-    ]
-    if phoenix_shield_timer > 0:
-        hud_lines.append((f"PHOENIX SHIELD {phoenix_shield_timer:.1f}s", (255, 210, 80), (20, 135)))
-    elif flow.ready:
-        hud_lines.append(("PRESS E: PHOENIX SHIELD", (255, 210, 80), (20, 135)))
-    pygame.draw.rect(screen, (45, 55, 65), (20, 80, 220, 14))
-    pygame.draw.rect(screen, (80, 180, 245), (20, 80, round(220 * flight.boost_ratio), 14))
-    for label, color, position in hud_lines:
-        screen.blit(hud_font.render(label, True, color), position)
-
-    frozen_frame = screen.copy()
-    pygame.display.flip()
-
-
-# QUIT
-
-pygame.quit()
+        health = (850 + self.waves.wave * 30) if boss else {"hunter": 65, "flanker": 55, "bomber": 120}[kind] + self.waves.wave * 4
+        speed = {"hunter": 140, "flanker": 185, "bomber": 95, "boss": 90}[kind] + min(65, self.waves.wave * 4)
+        self.enemies.append(Enemy(position, kind, health, health, speed, phase=self.rng.uniform(0, math.tau), shot_timer=self.rng.uniform(1, 2)))
+
+    def update(self, dt, keys, mouse_position, buttons):
+        self.mouse = pygame.Vector2(mouse_position)
+        if self.state != "playing":
+            return
+        dt = max(0, min(dt, 0.05))
+        self.time += dt
+        for attr in ("shield", "hit_cooldown", "cannon_cooldown", "missile_cooldown", "banner_timer"):
+            setattr(self, attr, max(0, getattr(self, attr) - dt))
+        self.shake = max(0, self.shake - dt * 22)
+
+        # Camera travel and jet movement never rotate a stationary mouse heading.
+        if (self.mouse - self.last_mouse).length_squared() >= 4:
+            desired = self.mouse + self.camera - self.position
+            if desired.length_squared():
+                self.heading = desired.normalize()
+            self.last_mouse = self.mouse.copy()
+
+        self.previous_position = self.position.copy()
+        self.velocity = self.flight.update(self.velocity, self.heading, keys, dt)
+        self.position += self.velocity * dt
+        for axis, size in (("x", WORLD_SIZE[0]), ("y", WORLD_SIZE[1])):
+            value = getattr(self.position, axis)
+            clamped = max(40, min(size - 40, value))
+            if value != clamped:
+                setattr(self.position, axis, clamped)
+                setattr(self.velocity, axis, 0)
+
+        desired_camera = self.position + self.velocity * 0.16 - pygame.Vector2(self.screen.get_width() / 2, self.screen.get_height() / 2)
+        self.camera += (desired_camera - self.camera) * (1 - math.exp(-7 * dt))
+        self.camera.x = max(0, min(WORLD_SIZE[0] - self.screen.get_width(), self.camera.x))
+        self.camera.y = max(0, min(WORLD_SIZE[1] - self.screen.get_height(), self.camera.y))
+        was_ready = self.flow.ready
+        self.flow.update(dt, self.velocity.length(), self.flight.max_speed, self.flight.is_boosting)
+
+        if keys[pygame.K_w] or keys[pygame.K_UP]:
+            life = 0.3 if self.flight.is_boosting else 0.18
+            color = (255, 171, 78) if self.flight.is_boosting else (96, 177, 212)
+            self.particles.append([self.position - self.heading * 25, -self.heading * 95, life, life, color, 7 if self.flight.is_boosting else 4])
+
+        self.update_enemies(dt)
+        self.lock.update(self.enemies, self.position, self.heading, dt)
+        if buttons[0] or self.assist:
+            self.fire_cannon()
+        if buttons[2] or keys[pygame.K_SPACE] or self.assist:
+            self.fire_missile()
+        self.update_projectiles(dt)
+        self.remove_defeated()
+        if not was_ready and self.flow.ready:
+            self.audio.play("ready")
+
+        if self.health <= 0:
+            self.state = "gameover"
+            self.burst(self.position, (255, 160, 80), 35, 9)
+            self.audio.play("explode")
+        else:
+            self.update_waves(dt)
+        for particle in self.particles:
+            particle[0] += particle[1] * dt
+            particle[2] -= dt
+        self.particles = [particle for particle in self.particles if particle[2] > 0][-450:]
+        self.rings = [(pos, age + dt) for pos, age in self.rings if age + dt < 0.65]
+
+    def update_enemies(self, dt):
+        for enemy in self.enemies:
+            enemy.flash = max(0, enemy.flash - dt)
+            enemy.phase += dt
+            offset = self.position - enemy.position
+            distance = offset.length()
+            if distance == 0 or enemy.health <= 0:
+                continue
+            toward = offset / distance
+            side = pygame.Vector2(-toward.y, toward.x)
+            if enemy.kind == "flanker":
+                movement = toward * (1 if distance > 330 else -0.3) + side * 0.9
+            elif enemy.kind in ("bomber", "boss"):
+                movement = toward * (1 if distance > 450 else -0.35) + side * 0.35
+            else:
+                movement = toward * (1 if distance > 290 else -0.2) + side * math.sin(enemy.phase * 1.6) * 0.45
+            if movement.length_squared():
+                enemy.position += movement.normalize() * enemy.speed * dt
+            enemy.position.x = max(60, min(WORLD_SIZE[0] - 60, enemy.position.x))
+            enemy.position.y = max(60, min(WORLD_SIZE[1] - 60, enemy.position.y))
+            enemy.heading = toward
+            enemy.shot_timer -= dt
+            if distance < 650 and enemy.shot_timer <= 0:
+                lead = self.position + self.velocity * min(0.4, distance / 700) - enemy.position
+                direction = lead.normalize() if lead.length_squared() else toward
+                angles = (-14, 0, 14) if enemy.kind in ("bomber", "boss") else (0,)
+                for angle in angles:
+                    self.projectiles.append(Projectile(enemy.position + toward * 26, direction.rotate(angle) * 370, 8, "enemy", lifetime=2.7))
+                enemy.shot_timer = self.rng.uniform(1.3, 2.1) / (1 + min(0.5, self.waves.wave * 0.035))
+            if distance < enemy.radius + PLAYER_RADIUS:
+                self.damage(12)
+                enemy.position -= toward * 70
+
+    def fire_cannon(self):
+        if self.cannon_cooldown > 0:
+            return
+        target = select_target(self.enemies, self.position, self.heading, 620, 12)
+        direction = (target.position - self.position).normalize() if target else self.heading.copy()
+        self.projectiles.append(Projectile(self.position + self.heading * 34, direction * 1000 + self.velocity * 0.25, 22, "player", lifetime=0.8))
+        self.cannon_cooldown = 0.13
+        self.burst(self.position + self.heading * 34, (255, 215, 120), 2, 3)
+        self.audio.play("cannon")
+
+    def fire_missile(self):
+        if self.missile_cooldown > 0 or not self.lock.ready:
+            return False
+        self.projectiles.append(Projectile(self.position + self.heading * 35, self.heading * 480, 85, "player", radius=7, lifetime=5, target=self.lock.target, missile=True))
+        self.missile_cooldown = 2.4
+        self.audio.play("missile")
+        return True
+
+    def damage(self, amount):
+        if self.shield > 0 or self.hit_cooldown > 0:
+            return
+        self.health = max(0, self.health - amount)
+        self.hit_cooldown = 0.25
+        self.flow.break_flow()
+        self.shake = 7
+        self.burst(self.position, (255, 106, 102), 10)
+        self.audio.play("hit")
+
+    def update_projectiles(self, dt):
+        survivors = []
+        for shot in self.projectiles:
+            start = shot.position.copy()
+            if shot.missile:
+                guide_missile(shot, dt)
+                self.particles.append([start.copy(), -shot.velocity * 0.12, 0.2, 0.2, (198, 144, 88), 4])
+            shot.position += shot.velocity * dt
+            shot.lifetime -= dt
+            hit = False
+            if shot.owner == "player":
+                candidates = []
+                for enemy in self.enemies:
+                    fraction = hit_fraction(enemy.position, start, shot.position, enemy.radius + shot.radius)
+                    if enemy.health > 0 and fraction is not None:
+                        candidates.append((fraction, enemy))
+                if candidates:
+                    fraction, enemy = min(candidates, key=lambda item: item[0])
+                    shot.position = start + (shot.position - start) * fraction
+                    enemy.health -= shot.damage
+                    enemy.flash = 0.1
+                    self.burst(shot.position, (255, 192, 101), 7)
+                    hit = True
+            else:
+                # Relative movement catches fast shots even as the jet moves.
+                relative_start = start - self.previous_position
+                relative_end = shot.position - self.position
+                distance = segment_distance(pygame.Vector2(), relative_start, relative_end)
+                if distance <= PLAYER_RADIUS + shot.radius:
+                    self.damage(shot.damage)
+                    hit = True
+                elif distance <= 61 and not shot.near_miss_awarded:
+                    relative_motion = relative_end - relative_start
+                    if relative_end.dot(relative_motion) >= 0 and relative_start.dot(relative_motion) <= 0:
+                        self.flow.reward_maneuver(12)
+                        shot.near_miss_awarded = True
+                        self.burst(self.position, (79, 222, 202), 7, 3)
+            if not hit and shot.lifetime > 0 and -80 < shot.position.x < WORLD_SIZE[0] + 80 and -80 < shot.position.y < WORLD_SIZE[1] + 80:
+                survivors.append(shot)
+        self.projectiles = survivors
+
+    def remove_defeated(self):
+        alive = []
+        for enemy in self.enemies:
+            if enemy.health <= 0:
+                self.score += 1000 if enemy.kind == "boss" else 100
+                self.flow.reward_maneuver(3, 0.05)
+                self.burst(enemy.position, (255, 169, 83), 32 if enemy.kind == "boss" else 19, 8)
+                self.rings.append((enemy.position.copy(), 0))
+                self.shake = max(self.shake, 4)
+                self.audio.play("explode")
+            else:
+                alive.append(enemy)
+        self.enemies = alive
+        if self.lock.target not in alive:
+            self.lock.target = None
+            self.lock.progress = 0
+
+    def update_waves(self, dt):
+        action = self.waves.update(dt, len(self.enemies))
+        if action == "spawn":
+            self.spawn_enemy()
+        elif action == "clear":
+            self.health = min(100, self.health + 12)
+            self.projectiles = [shot for shot in self.projectiles if shot.owner == "player"]
+            self.banner = "SECTOR CLEAR / HULL REPAIRED +12"
+            self.banner_timer = 3
+            self.audio.play("ready")
+        elif action == "next":
+            self.waves.begin()
+            self.banner = f"WAVE {self.waves.wave:02d} / {'BOSS INBOUND' if self.waves.wave % 9 == 0 else 'NEW CONTACTS'}"
+            self.banner_timer = 2.5
+
+
+def main():
+    pygame.mixer.pre_init(22050, -16, 1, 512)
+    pygame.init()
+    screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+    pygame.display.set_caption(GAME_TITLE)
+    clock = pygame.time.Clock()
+    game = Game(screen)
+    try:
+        while game.running:
+            dt = clock.tick(FPS) / 1000
+            for event in pygame.event.get():
+                game.event(event)
+            if not game.running:
+                break
+            game.update(dt, pygame.key.get_pressed(), pygame.mouse.get_pos(), pygame.mouse.get_pressed())
+            pygame.mouse.set_visible(game.state != "playing")
+            game.renderer.draw(game)
+            pygame.display.flip()
+    finally:
+        pygame.mouse.set_visible(True)
+        pygame.quit()
+
+
+if __name__ == "__main__":
+    main()
