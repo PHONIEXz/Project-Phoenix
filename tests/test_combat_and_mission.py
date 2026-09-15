@@ -84,8 +84,16 @@ class AudioTests(unittest.TestCase):
     def test_unavailable_audio_device_is_optional(self):
         with patch("pygame.mixer.get_init", return_value=None), patch("pygame.mixer.init", side_effect=pygame.error("no device")):
             audio = Audio()
+            audio.toggle()
             audio.play("cannon")
             self.assertEqual(audio.sounds, {})
+
+    def test_audio_constructor_never_opens_a_device(self):
+        with patch("pygame.mixer.init") as initialize:
+            audio = Audio()
+            self.assertTrue(audio.muted)
+            self.assertEqual(audio.sounds, {})
+            initialize.assert_not_called()
 
 
 if __name__ == "__main__":

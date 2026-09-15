@@ -18,30 +18,36 @@ RED = (255, 106, 102)
 
 
 class Renderer:
-    def __init__(self, screen, world_size):
+    def __init__(self, screen, world_size, status=None):
+        report = status or (lambda message: None)
         self.screen = screen
         self.width, self.height = screen.get_size()
+        report("Loading fonts and aircraft")
         self.fonts = {size: pygame.font.Font(None, size) for size in (18, 21, 24, 28, 34, 48, 80, 116)}
         ships = Path(__file__).resolve().parents[1] / "Assets" / "Jets" / "Ships"
+        raw_ships = {jet.index: pygame.image.load(str(ships / f"ship_{jet.index:04d}.png")).convert_alpha() for jet in JETS}
         self.sprites = {
-            "player": pygame.transform.scale(pygame.image.load(str(ships / "ship_0011.png")).convert_alpha(), (72, 72)),
-            "hunter": pygame.transform.scale(pygame.image.load(str(ships / "ship_0000.png")).convert_alpha(), (64, 64)),
-            "flanker": pygame.transform.scale(pygame.image.load(str(ships / "ship_0004.png")).convert_alpha(), (64, 64)),
-            "bomber": pygame.transform.scale(pygame.image.load(str(ships / "ship_0007.png")).convert_alpha(), (78, 78)),
-            "boss": pygame.transform.scale(pygame.image.load(str(ships / "ship_0002.png")).convert_alpha(), (136, 136)),
+            "player": pygame.transform.scale(raw_ships[11], (72, 72)),
+            "hunter": pygame.transform.scale(raw_ships[0], (64, 64)),
+            "flanker": pygame.transform.scale(raw_ships[4], (64, 64)),
+            "bomber": pygame.transform.scale(raw_ships[7], (78, 78)),
+            "boss": pygame.transform.scale(raw_ships[2], (136, 136)),
         }
         self.rotation_cache = {}
-        self.jet_sprites = {jet.index: pygame.transform.scale(pygame.image.load(str(ships / f"ship_{jet.index:04d}.png")).convert_alpha(), (72, 72)) for jet in JETS}
+        self.jet_sprites = {index: pygame.transform.scale(image, (72, 72)) for index, image in raw_ships.items()}
         self.player_index = 11
         self.world_size = world_size
+        report("Preparing the battlefield")
         self.terrain = self.make_terrain(world_size)
         self.cloud = pygame.Surface((280, 160), pygame.SRCALPHA)
         for layer in range(6):
             pygame.draw.ellipse(self.cloud, (172, 207, 212, 4 + layer * 2), (layer * 10, layer * 6, 280 - layer * 20, 160 - layer * 12))
+        report("Aircraft and battlefield ready")
 
     def make_terrain(self, size):
         rng = random.Random(48)
-        surface = pygame.Surface(size).convert()
+        # A new surface already uses the display format; avoid a second map copy.
+        surface = pygame.Surface(size, depth=self.screen.get_bitsize())
         surface.fill((19, 54, 66))
         for _ in range(2600):
             x, y = rng.randrange(size[0]), rng.randrange(size[1])

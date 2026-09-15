@@ -2,6 +2,7 @@
 
 import math
 import random
+import time
 import pygame
 
 from GameSettings import SCREEN_WIDTH, SCREEN_HEIGHT, FPS, GAME_TITLE
@@ -21,14 +22,16 @@ PLAYER_RADIUS = 24
 class Game:
     world_size = WORLD_SIZE
 
-    def __init__(self, screen, seed=None, save_path=None):
+    def __init__(self, screen, seed=None, save_path=None, status=None):
         self.screen = screen
         self.rng = random.Random(seed)
         self.visual_rng = random.Random(31)
         self.audio = Audio()
-        self.renderer = Renderer(screen, WORLD_SIZE)
+        self.renderer = Renderer(screen, WORLD_SIZE, status=status)
         self.running = True
         self.assist = False
+        if status:
+            status("Loading saved progress")
         self.progress = Progress(save_path)
         self.hangar_selection = 0
         self.hangar_return = "menu"
@@ -140,9 +143,7 @@ class Game:
                         reinforce_drones(self)
                 return
             if event.key == pygame.K_m:
-                self.audio.muted = not self.audio.muted
-                if self.audio.muted and pygame.mixer.get_init():
-                    pygame.mixer.stop()
+                self.audio.toggle()
             elif event.key == pygame.K_RETURN and self.state == "menu":
                 self.reset()
             elif event.key == pygame.K_r and self.state == "gameover":
@@ -403,14 +404,36 @@ class Game:
             self.banner_timer = 2.5
 
 
+def loading_screen(screen, message):
+    print(f"[startup] {message}", flush=True)
+    screen.fill((10, 19, 29))
+    title_font = pygame.font.Font(None, 48)
+    font = pygame.font.Font(None, 24)
+    title = title_font.render("PROJECT PHOENIX", True, (255, 194, 94))
+    detail = font.render(message, True, (226, 238, 240))
+    center = screen.get_rect().center
+    screen.blit(title, title.get_rect(center=(center[0], center[1] - 25)))
+    screen.blit(detail, detail.get_rect(center=(center[0], center[1] + 30)))
+    pygame.display.flip()
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            raise SystemExit(0)
+
+
 def main():
-    pygame.mixer.pre_init(22050, -16, 1, 512)
-    pygame.init()
-    screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-    pygame.display.set_caption(GAME_TITLE)
-    clock = pygame.time.Clock()
-    game = Game(screen)
+    started = time.perf_counter()
+    game = None
     try:
+        print("[startup] Opening game window (audio disabled)", flush=True)
+        # Initialise only the modules required to show a screen.
+        pygame.display.init()
+        pygame.font.init()
+        screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+        pygame.display.set_caption(GAME_TITLE)
+        loading_screen(screen, "Starting flight operations")
+        clock = pygame.time.Clock()
+        game = Game(screen, status=lambda message: loading_screen(screen, message))
+        print(f"[startup] Menu ready in {time.perf_counter() - started:.2f}s. Enter to launch; M enables sound.", flush=True)
         while game.running:
             dt = clock.tick(FPS) / 1000
             for event in pygame.event.get():
@@ -422,8 +445,10 @@ def main():
             game.renderer.draw(game)
             pygame.display.flip()
     finally:
-        game.progress.save()
-        pygame.mouse.set_visible(True)
+        if game is not None:
+            game.progress.save()
+        if pygame.display.get_init():
+            pygame.mouse.set_visible(True)
         pygame.quit()
 
 

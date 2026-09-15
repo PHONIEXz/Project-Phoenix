@@ -16,6 +16,8 @@ python MainContents.py
 
 If you already created this environment, activate it and run the game; installation is only needed once.
 
+Launch shows a loading screen and prints `[startup]` stage messages. Audio stays off during startup to avoid waiting on a sound device. Press M after the menu opens to enable effects. If launch stalls, run `python -u MainContents.py` and report the last `[startup]` line. If enabling sound stalls instead, report the `[audio]` line.
+
 ## Other Python environments
 
 Use Python 3.10 or newer:
