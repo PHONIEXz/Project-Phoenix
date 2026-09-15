@@ -20,6 +20,7 @@ class FlightController:
         self.boost_recharge_delay = 0.75
         self.time_since_boost = 999.0
         self.is_boosting = False
+        self.boost_exhausted = False
 
     @staticmethod
     def _safe_normalize(vector):
@@ -29,7 +30,7 @@ class FlightController:
 
     def update(self, velocity, aim_direction, keys, dt):
         """Return the updated velocity for one frame."""
-        dt = min(dt, 0.05)
+        dt = max(0.0, min(dt, 0.05))
         forward = self._safe_normalize(aim_direction)
         right = pygame.Vector2(-forward.y, forward.x)
 
@@ -38,11 +39,14 @@ class FlightController:
         strafe_left = keys[pygame.K_a] or keys[pygame.K_LEFT]
         strafe_right = keys[pygame.K_d] or keys[pygame.K_RIGHT]
         wants_boost = keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]
+        if not wants_boost:
+            self.boost_exhausted = False
 
         self.is_boosting = bool(
             wants_boost
             and thrusting
             and self.boost_energy > 0
+            and not self.boost_exhausted
             and forward.length_squared() > 0
         )
 
@@ -68,6 +72,8 @@ class FlightController:
                 self.boost_energy - self.boost_drain_per_second * dt,
             )
             self.time_since_boost = 0.0
+            if self.boost_energy == 0:
+                self.boost_exhausted = True
         else:
             self.time_since_boost += dt
             if self.time_since_boost >= self.boost_recharge_delay:
@@ -77,7 +83,10 @@ class FlightController:
                 )
 
         speed_limit = self.boost_max_speed if self.is_boosting else self.max_speed
-        if velocity.length() > speed_limit:
+        speed = velocity.length()
+        if speed > speed_limit:
+            # Releasing boost sheds extra speed gradually instead of snapping.
+            speed_limit = max(speed_limit, speed - self.brake_acceleration * dt)
             velocity.scale_to_length(speed_limit)
 
         velocity *= self.drag ** (dt * 60.0)

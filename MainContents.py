@@ -4,6 +4,8 @@ import random
 from pathlib import Path
 
 from GameSettings import SCREEN_WIDTH, SCREEN_HEIGHT, FPS, GAME_TITLE
+from Game.flight_system import FlightController
+from Game.phoenix_flow import PhoenixFlow
 
 
 # PROJECT PATH
@@ -49,10 +51,16 @@ player_rect = player_image.get_rect(
     center=player_position
 )
 
-PLAYER_ACCELERATION = 520
-PLAYER_MAX_SPEED = 420
-PLAYER_BRAKE_ACCELERATION = 620
-PLAYER_DRAG = 0.985
+flight = FlightController()
+flow = PhoenixFlow()
+hud_font = pygame.font.Font(None, 23)
+title_font = pygame.font.Font(None, 48)
+PHOENIX_SHIELD_DURATION = 4.0
+phoenix_shield_timer = 0.0
+engine_trails = []
+paused = False
+score = 0
+current_time = 0.0
 
 PLAYER_MAX_HEALTH = 100
 player_health = PLAYER_MAX_HEALTH
@@ -60,13 +68,10 @@ player_health = PLAYER_MAX_HEALTH
 
 # PHOENIX ENERGY / NEAR MISS SYSTEM
 
-PHOENIX_MAX_ENERGY = 100
 PHOENIX_NEAR_MISS_GAIN = 12
 
 # How close a hostile shot must pass to count as a near miss.
 NEAR_MISS_RADIUS = 48
-
-phoenix_energy = 0
 
 near_miss_flash_timer = 0
 NEAR_MISS_FLASH_TIME = 0.22
@@ -214,31 +219,72 @@ for _ in range(MAX_ENEMIES):
 
 # MAIN GAME LOOP
 
+screen.fill((10, 15, 25))
+frozen_frame = screen.copy()
+
 running = True
 
 while running:
 
     # TIME
 
-    dt = clock.tick(FPS) / 1000
-
-    current_time = (
-        pygame.time.get_ticks()
-        / 1000
-    )
-
-    if near_miss_flash_timer > 0:
-
-        near_miss_flash_timer -= dt
-
+    dt = min(clock.tick(FPS) / 1000, 0.05)
 
     # EVENTS
-
     for event in pygame.event.get():
-
         if event.type == pygame.QUIT:
             running = False
+        elif event.type == pygame.KEYDOWN:
+            if event.key in (pygame.K_ESCAPE, pygame.K_p) and player_health > 0:
+                paused = not paused
+                last_mouse_position = pygame.Vector2(pygame.mouse.get_pos())
+            elif event.key == pygame.K_e and not paused and player_health > 0:
+                if flow.consume():
+                    phoenix_shield_timer = PHOENIX_SHIELD_DURATION
+            elif event.key == pygame.K_r and player_health <= 0:
+                player_position.update(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2)
+                player_velocity.update(0, 0)
+                player_rect.center = player_position
+                aim_direction.update(1, 0)
+                last_mouse_position = pygame.Vector2(pygame.mouse.get_pos())
+                player_health = PLAYER_MAX_HEALTH
+                flight = FlightController()
+                flow = PhoenixFlow()
+                phoenix_shield_timer = 0.0
+                near_miss_flash_timer = 0.0
+                score = 0
+                current_time = 0.0
+                last_bullet_time = last_missile_time = last_respawn_time = 0.0
+                enemies.clear()
+                bullets.clear()
+                missiles.clear()
+                enemy_bullets.clear()
+                engine_trails.clear()
+                for _ in range(MAX_ENEMIES):
+                    spawn_enemy()
+                paused = False
 
+    if not running:
+        break
+
+    # Freeze the simulation clock while paused or after defeat.
+    if paused or player_health <= 0:
+        screen.blit(frozen_frame, (0, 0))
+        shade = pygame.Surface(screen.get_size(), pygame.SRCALPHA)
+        shade.fill((5, 10, 20, 190))
+        screen.blit(shade, (0, 0))
+        message = "PAUSED" if paused else "FLIGHT ENDED"
+        hint = "P / Esc to resume" if paused else "R to restart"
+        title = title_font.render(message, True, (255, 220, 120))
+        text = hud_font.render(hint, True, (230, 235, 245))
+        screen.blit(title, title.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 20)))
+        screen.blit(text, text.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 + 25)))
+        pygame.display.flip()
+        continue
+
+    current_time += dt
+    near_miss_flash_timer = max(0.0, near_miss_flash_timer - dt)
+    phoenix_shield_timer = max(0.0, phoenix_shield_timer - dt)
 
     # MOUSE AIMING
 
@@ -272,64 +318,9 @@ while running:
         )
 
 
-    # FLIGHT MODEL V2 - STAGE 1
-
+    # FLIGHT MODEL V2: thrust, braking, lateral banking and afterburner.
     keys = pygame.key.get_pressed()
-
-    if (
-        keys[pygame.K_w]
-        or keys[pygame.K_UP]
-    ):
-
-        player_velocity += (
-            aim_direction
-            * PLAYER_ACCELERATION
-            * dt
-        )
-
-    if (
-        keys[pygame.K_s]
-        or keys[pygame.K_DOWN]
-    ):
-
-        if player_velocity.length() > 0:
-
-            brake_direction = (
-                -player_velocity.normalize()
-            )
-
-            player_velocity += (
-                brake_direction
-                * PLAYER_BRAKE_ACCELERATION
-                * dt
-            )
-
-            if player_velocity.length() < 15:
-
-                player_velocity.update(
-                    0,
-                    0
-                )
-
-
-    # LIMIT SPEED
-
-    if (
-        player_velocity.length()
-        > PLAYER_MAX_SPEED
-    ):
-
-        player_velocity.scale_to_length(
-            PLAYER_MAX_SPEED
-        )
-
-
-    # DRAG
-
-    player_velocity *= (
-        PLAYER_DRAG ** (dt * FPS)
-    )
-
+    player_velocity = flight.update(player_velocity, aim_direction, keys, dt)
 
     # MOVE PLAYER
 
@@ -401,7 +392,7 @@ while running:
     rotated_player = (
         pygame.transform.rotate(
             player_image,
-            angle
+            angle - 90  # Kenney ship artwork points up by default.
         )
     )
 
@@ -419,6 +410,13 @@ while running:
         round(player_position.y)
     )
 
+
+    flow.update(dt, player_velocity.length(), flight.max_speed, flight.is_boosting)
+
+    # Short engine trails show momentum and make boost easy to read.
+    engine_trails = [(pos, life - dt, boosted) for pos, life, boosted in engine_trails if life > dt]
+    if keys[pygame.K_w] or keys[pygame.K_UP]:
+        engine_trails.append((player_position - aim_direction * 14, 0.3, flight.is_boosting))
 
     # ENEMY MOVEMENT
 
@@ -748,9 +746,9 @@ while running:
             player_rect
         ):
 
-            player_health -= (
-                ENEMY_BULLET_DAMAGE
-            )
+            if phoenix_shield_timer <= 0:
+                player_health -= ENEMY_BULLET_DAMAGE
+                flow.break_flow()
 
             player_health = max(
                 0,
@@ -776,19 +774,13 @@ while running:
         if (
             distance_from_player
             <= NEAR_MISS_RADIUS
+            and (enemy_bullet["pos"] - player_position).dot(enemy_bullet["direction"]) > 0
             and not enemy_bullet[
                 "near_miss_awarded"
             ]
         ):
 
-            phoenix_energy += (
-                PHOENIX_NEAR_MISS_GAIN
-            )
-
-            phoenix_energy = min(
-                PHOENIX_MAX_ENERGY,
-                phoenix_energy
-            )
+            flow.reward_maneuver(PHOENIX_NEAR_MISS_GAIN)
 
             enemy_bullet[
                 "near_miss_awarded"
@@ -817,6 +809,7 @@ while running:
         if enemy["health"] <= 0:
 
             enemies.remove(enemy)
+            score += 100
 
 
     # RESPAWN ENEMIES
@@ -841,6 +834,11 @@ while running:
         (10, 15, 25)
     )
 
+
+    for trail_pos, life, boosted in engine_trails:
+        color = (255, 160, 50) if boosted else (80, 160, 220)
+        color = tuple(round(channel * life / 0.3) for channel in color)
+        pygame.draw.circle(screen, color, trail_pos, max(1, round(life * (20 if boosted else 12))))
 
     # CANNON RANGE
 
@@ -1008,6 +1006,9 @@ while running:
     )
 
 
+    if phoenix_shield_timer > 0:
+        pygame.draw.circle(screen, (255, 190, 70), player_rect.center, 30, 3)
+
     # PLAYER HEALTH BAR
 
     health_bar_width = 220
@@ -1048,8 +1049,7 @@ while running:
     energy_bar_width = 220
 
     energy_ratio = (
-        phoenix_energy
-        / PHOENIX_MAX_ENERGY
+        flow.energy_ratio
     )
 
     pygame.draw.rect(
@@ -1078,6 +1078,25 @@ while running:
     )
 
 
+    # FLIGHT HUD
+    hud_lines = [
+        ("HULL", (250, 250, 250), (250, 20)),
+        (f"{flow.state_name}  |  Flow x{flow.flow:.1f}", (255, 180, 70), (250, 48)),
+        (f"BOOST {flight.boost_energy:.0f}%", (100, 200, 255), (250, 77)),
+        (f"SPEED {player_velocity.length():.0f}   SCORE {score}", (220, 230, 240), (20, 106)),
+        ("Mouse aim | W/Up thrust | S/Down brake | A/D bank | Shift + thrust boost", (170, 190, 210), (20, SCREEN_HEIGHT - 47)),
+        ("E Phoenix shield (full energy) | P/Esc pause", (170, 190, 210), (20, SCREEN_HEIGHT - 25)),
+    ]
+    if phoenix_shield_timer > 0:
+        hud_lines.append((f"PHOENIX SHIELD {phoenix_shield_timer:.1f}s", (255, 210, 80), (20, 135)))
+    elif flow.ready:
+        hud_lines.append(("PRESS E: PHOENIX SHIELD", (255, 210, 80), (20, 135)))
+    pygame.draw.rect(screen, (45, 55, 65), (20, 80, 220, 14))
+    pygame.draw.rect(screen, (80, 180, 245), (20, 80, round(220 * flight.boost_ratio), 14))
+    for label, color, position in hud_lines:
+        screen.blit(hud_font.render(label, True, color), position)
+
+    frozen_frame = screen.copy()
     pygame.display.flip()
 
 
