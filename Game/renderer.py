@@ -5,7 +5,7 @@ import random
 from pathlib import Path
 
 import pygame
-from Game.progression import JETS, DRONE_PRICES
+from Game.progression import JETS, DRONE_PRICES, MAX_WEAPON_LEVEL
 from Game.support import GUARD_RADIUS
 
 INK = (10, 19, 29)
@@ -79,7 +79,10 @@ class Renderer:
 
     def text(self, label, position, size=24, color=WHITE, center=False):
         # Cache requested sizes lazily so a new HUD label cannot crash the game.
-        font = self.fonts.setdefault(size, pygame.font.Font(None, size))
+        font = self.fonts.get(size)
+        if font is None:
+            font = pygame.font.Font(None, size)
+            self.fonts[size] = font
         image = font.render(str(label), True, color)
         rect = image.get_rect(center=position) if center else image.get_rect(topleft=position)
         self.screen.blit(image, rect)
@@ -144,6 +147,8 @@ class Renderer:
             pygame.draw.circle(self.screen, color, pos - offset, radius)
         for pos, age in game.rings:
             pygame.draw.circle(self.screen, GOLD if age < 0.2 else (164, 117, 76), pos - offset, round(18 + age * 115), 2)
+        for pickup in game.powerups:
+            self.powerup(pickup, offset)
 
         for enemy in game.enemies:
             pos = enemy.position - offset
@@ -224,8 +229,9 @@ class Renderer:
         self.text("PROJECT / PHOENIX", (36, 29), 24)
         self.text(f"{game.jet.name.upper()} / {game.progress.coins} COINS", (36, 55), 18, GOLD)
         self.panel(pygame.Rect(self.width / 2 - 163, 18, 326, 61))
-        self.text(f"WAVE {game.waves.wave:02d}  /  {game.score:06d} PTS", (self.width / 2, 39), 28, WHITE, True)
-        self.text(f"{len(game.enemies) + game.waves.remaining} CONTACTS REMAINING", (self.width / 2, 63), 18, MUTED, True)
+        self.text(f"SECTOR {game.waves.sector:02d} / {game.waves.sector_name}", (self.width / 2, 35), 21, TEAL, True)
+        self.text(f"WAVE {game.waves.wave_in_sector:02d}/10  /  {game.score:06d} PTS", (self.width / 2, 60), 24, WHITE, True)
+        self.text(f"{len(game.enemies) + game.waves.remaining} CONTACTS REMAINING / {game.waves.formation}", (self.width / 2, 82), 15, MUTED, True)
         self.panel(pygame.Rect(self.width - 217, 18, 197, 164))
         self.text("SECTOR RADAR", (self.width - 201, 30), 18, TEAL)
         radar = pygame.Rect(self.width - 202, 58, 167, 107)
@@ -239,6 +245,13 @@ class Renderer:
             pygame.draw.circle(self.screen, RED, radar_pos(enemy.position), 4 if enemy.kind == "boss" else 2)
         pygame.draw.circle(self.screen, TEAL, radar_pos(game.position), 4)
 
+        boss = next((enemy for enemy in game.enemies if enemy.kind == "boss" and enemy.health > 0), None)
+        if boss is not None:
+            boss_panel = pygame.Rect(self.width / 2 - 260, 91, 520, 30)
+            pygame.draw.rect(self.screen, (25, 35, 43), boss_panel, border_radius=6)
+            pygame.draw.rect(self.screen, RED, (boss_panel.x + 2, boss_panel.y + 19, (boss_panel.w - 4) * max(0, boss.health / boss.max_health), 8), border_radius=3)
+            self.text(f"{boss.boss_name or 'SECTOR BOSS'} / PHASE {boss.boss_phase}", (boss_panel.centerx, boss_panel.y + 8), 16, GOLD, True)
+
         self.panel(pygame.Rect(20, self.height - 149, 274, 126))
         self.meter(38, self.height - 135, "HULL", f"{game.health:.0f}/{game.jet.hull}", game.health / game.jet.hull, RED if game.health < game.jet.hull * 0.3 else TEAL)
         self.meter(38, self.height - 97, "AFTERBURNER", f"{game.flight.boost_energy:.0f}%", game.flight.boost_ratio, (100, 191, 255))
@@ -247,6 +260,8 @@ class Renderer:
         self.text("CANNON  /  LEFT MOUSE", (self.width - 298, self.height - 110), 21)
         if game.missile_cooldown > 0:
             status = f"MISSILE REARM {game.missile_cooldown:.1f}s"
+        elif game.missile_charges:
+            status = f"EMERGENCY MISSILES x{game.missile_charges} / AIM + RIGHT MOUSE"
         elif game.lock.ready:
             status = "LOCKED / RIGHT MOUSE OR SPACE"
         elif game.lock.target is not None:
@@ -263,6 +278,15 @@ class Renderer:
             self.text("PHOENIX READY / E SUMMON / B MODE", (self.width / 2, self.height - 123), 21, GOLD, True)
         else:
             self.text(f"PHOENIX FLOW {game.flow.energy:.0f}% / E WHEN READY", (self.width / 2, self.height - 123), 19, MUTED, True)
+        effects = []
+        if game.shield_timer > 0:
+            effects.append(f"SHIELD {game.shield_timer:.0f}s")
+        if game.overdrive_timer > 0:
+            effects.append(f"OVERDRIVE {game.overdrive_timer:.0f}s")
+        if game.missile_charges:
+            effects.append(f"EMERGENCY MISSILES {game.missile_charges}")
+        if effects:
+            self.text(" / ".join(effects), (self.width / 2, self.height - 151), 18, GOLD, True)
         self.text(f"{len(game.drones)} DRONE{'S' if len(game.drones) != 1 else ''} / H HANGAR", (self.width / 2, self.height - 27), 18, TEAL, True)
         if game.progress.error:
             self.text(game.progress.error, (self.width / 2, 190), 21, RED, True)
@@ -314,6 +338,17 @@ class Renderer:
             pygame.draw.line(self.screen, TEAL, pos - pygame.Vector2(5, math.sin(time * 30) * 3), pos + pygame.Vector2(5, math.sin(time * 30) * 3), 1)
         pygame.draw.polygon(self.screen, TEAL, [position + pygame.Vector2(0, -9), position + pygame.Vector2(7, 0), position + pygame.Vector2(0, 9), position + pygame.Vector2(-7, 0)])
         pygame.draw.circle(self.screen, WHITE, position, 2)
+
+    def powerup(self, pickup, offset):
+        position = pickup.position - offset
+        if not (-60 < position.x < self.width + 60 and -60 < position.y < self.height + 60):
+            return
+        bob = math.sin(pickup.phase * 5) * 4
+        position.y += bob
+        pygame.draw.circle(self.screen, (20, 38, 47), position, 24)
+        pygame.draw.circle(self.screen, pickup.color, position, 20, 3)
+        pygame.draw.circle(self.screen, pickup.color, position, 7)
+        self.text(pickup.kind[0].upper(), position, 16, INK, True)
 
     def phoenix_bird(self, position, heading, time):
         angle = math.degrees(math.atan2(heading.y, heading.x))
@@ -382,9 +417,9 @@ class Renderer:
         label = "EQUIP / ENTER" if base_jet.index in game.progress.owned else f"BUY & EQUIP / {base_jet.price} COINS"
         self.text(label, buy.center, 21, INK, True)
         upgrade = self.hangar_upgrade_button()
-        pygame.draw.rect(self.screen, GOLD if level < 5 and base_jet.index in game.progress.owned else (52, 105, 118), upgrade, border_radius=7)
-        upgrade_label = "MAX WEAPON LEVEL" if level >= 5 else f"UPGRADE WEAPON / {160 + level * 140} COINS / I"
-        self.text(upgrade_label, upgrade.center, 16, INK if level < 5 and base_jet.index in game.progress.owned else MUTED, True)
+        pygame.draw.rect(self.screen, GOLD if level < MAX_WEAPON_LEVEL and base_jet.index in game.progress.owned else (52, 105, 118), upgrade, border_radius=7)
+        upgrade_label = "MAX WEAPON LEVEL" if level >= MAX_WEAPON_LEVEL else f"UPGRADE WEAPON / {160 + level * 140} COINS / I"
+        self.text(upgrade_label, upgrade.center, 16, INK if level < MAX_WEAPON_LEVEL and base_jet.index in game.progress.owned else MUTED, True)
         panel = pygame.Rect(28, self.height - 164, 814, 87)
         self.panel(panel)
         self.text(f"DRONE SUPPORT / {1 + game.progress.drone_slots} OF 3", (46, panel.y + 15), 24, TEAL)

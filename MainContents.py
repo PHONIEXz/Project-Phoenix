@@ -10,6 +10,7 @@ from Game.audio import Audio
 from Game.combat import Enemy, Projectile, MissileLock, guide_missile, hit_fraction, segment_distance, select_target
 from Game.flight_system import FlightController
 from Game.mission import WaveDirector
+from Game.powerups import PowerUp, random_kind
 from Game.phoenix_flow import PhoenixFlow
 from Game.progression import Progress, JETS, JET_BY_INDEX
 from Game.renderer import Renderer
@@ -58,7 +59,13 @@ class Game:
         self.hit_cooldown = 0.0
         self.cannon_cooldown = 0.0
         self.missile_cooldown = 0.0
+        self.missile_charges = 0
+        self.shield_timer = 0.0
+        self.overdrive_timer = 0.0
+        self.combo = 0
+        self.combo_timer = 0.0
         self.enemies = []
+        self.powerups = []
         reinforce_drones(self)
         self.projectiles = []
         self.particles = []
@@ -189,9 +196,40 @@ class Game:
         self.particles = self.particles[-450:]
 
     def spawn_enemy(self):
-        boss = self.waves.wave % 10 == 0 and self.waves.remaining == self.waves.total - 1
+        boss = self.waves.boss_wave and self.waves.remaining == self.waves.total - 1
         kinds = ["hunter"] if self.waves.wave == 1 else ["hunter", "flanker", "bomber"]
         kind = "boss" if boss else self.rng.choice(kinds)
+        position = self.formation_position(self.waves.total - self.waves.remaining, boss)
+        health = (650 + self.waves.wave * 20) if boss else {"hunter": 55, "flanker": 50, "bomber": 100}[kind] + min(60, self.waves.wave * 2.5)
+        speed = {"hunter": 125, "flanker": 160, "bomber": 85, "boss": 80}[kind] + min(45, self.waves.wave * 2.5)
+        self.enemies.append(Enemy(position, kind, health, health, speed, phase=self.rng.uniform(0, math.tau), shot_timer=self.rng.uniform(1, 2), boss_name=self.waves.boss_name if boss else ""))
+
+    def formation_position(self, slot, boss=False):
+        """Place contacts in readable formations while retaining safe spawn distance."""
+        if boss:
+            formation = None
+        else:
+            direction = self.heading.normalize() if self.heading.length_squared() else pygame.Vector2(1, 0)
+            side = pygame.Vector2(-direction.y, direction.x)
+            anchor = self.position + direction * 820
+            formation = self.waves.formation
+            if formation == "VANGUARD SWEEP":
+                depth = slot // 3
+                lateral = (slot % 3 - 1) * 125
+                candidate = anchor + side * lateral - direction * depth * 100
+            elif formation == "PINCER RUN":
+                lateral = -260 if slot % 2 == 0 else 260
+                candidate = anchor + side * lateral + direction * ((slot // 2) % 3 - 1) * 90
+            elif formation == "CROSSWIND COLUMN":
+                candidate = anchor + side * ((slot % 5) - 2) * 95 - direction * (slot // 5) * 120
+            elif formation == "RINGBREAK":
+                angle = slot * math.tau / max(1, self.waves.total)
+                candidate = self.position + pygame.Vector2(math.cos(angle), math.sin(angle)) * 820
+            else:
+                candidate = anchor + side * ((slot % 4) - 1.5) * 105
+            if 90 <= candidate.x <= WORLD_SIZE[0] - 90 and 90 <= candidate.y <= WORLD_SIZE[1] - 90 and candidate.distance_to(self.position) >= 620:
+                return candidate
+
         # Reject out-of-map spawns instead of clamping them onto a nearby jet.
         corners = [pygame.Vector2(x, y) for x in (90, WORLD_SIZE[0] - 90) for y in (90, WORLD_SIZE[1] - 90)]
         position = max(corners, key=lambda point: point.distance_squared_to(self.position))
@@ -201,9 +239,7 @@ class Game:
             if 90 <= candidate.x <= WORLD_SIZE[0] - 90 and 90 <= candidate.y <= WORLD_SIZE[1] - 90:
                 position = candidate
                 break
-        health = (650 + self.waves.wave * 20) if boss else {"hunter": 55, "flanker": 50, "bomber": 100}[kind] + min(60, self.waves.wave * 2.5)
-        speed = {"hunter": 125, "flanker": 160, "bomber": 85, "boss": 80}[kind] + min(45, self.waves.wave * 2.5)
-        self.enemies.append(Enemy(position, kind, health, health, speed, phase=self.rng.uniform(0, math.tau), shot_timer=self.rng.uniform(1, 2)))
+        return position
 
     def update(self, dt, keys, mouse_position, buttons):
         self.mouse = pygame.Vector2(mouse_position)
@@ -211,8 +247,10 @@ class Game:
             return
         dt = max(0, min(dt, 0.05))
         self.time += dt
-        for attr in ("hit_cooldown", "cannon_cooldown", "missile_cooldown", "banner_timer"):
+        for attr in ("hit_cooldown", "cannon_cooldown", "missile_cooldown", "shield_timer", "overdrive_timer", "combo_timer", "banner_timer"):
             setattr(self, attr, max(0, getattr(self, attr) - dt))
+        if self.combo_timer <= 0:
+            self.combo = 0
         self.shake = max(0, self.shake - dt * 22)
 
         # Camera travel and jet movement never rotate a stationary mouse heading.
@@ -238,6 +276,7 @@ class Game:
         self.camera.y = max(0, min(WORLD_SIZE[1] - self.screen.get_height(), self.camera.y))
         was_ready = self.flow.ready
         self.flow.update(dt, self.velocity.length(), self.flight.max_speed, self.flight.is_boosting)
+        self.update_powerups(dt)
 
         if keys[pygame.K_w] or keys[pygame.K_UP]:
             life = 0.3 if self.flight.is_boosting else 0.18
@@ -272,6 +311,52 @@ class Game:
         self.particles = [particle for particle in self.particles if particle[2] > 0][-450:]
         self.rings = [(pos, age + dt) for pos, age in self.rings if age + dt < 0.65]
 
+    def spawn_powerup(self, position, boss=False):
+        chance = 1.0 if boss else 0.24
+        if self.rng.random() <= chance:
+            self.powerups.append(PowerUp(position.copy(), random_kind(self.rng, boss=boss)))
+
+    def update_powerups(self, dt):
+        survivors = []
+        for pickup in self.powerups:
+            pickup.lifetime -= dt
+            pickup.phase += dt
+            if pickup.lifetime <= 0:
+                continue
+            if pickup.position.distance_to(self.position) <= 52:
+                self.collect_powerup(pickup)
+                continue
+            survivors.append(pickup)
+        self.powerups = survivors
+
+    def collect_powerup(self, pickup):
+        effects = {
+            "repair": ("FIELD REPAIR / +30 HULL", (92, 222, 178)),
+            "shield": ("SHIELD ONLINE / 8 SECONDS", (101, 190, 255)),
+            "overdrive": ("OVERDRIVE / 8 SECONDS", (255, 194, 94)),
+            "missile": ("MISSILE CACHE / +2 EMERGENCY SHOTS", (255, 133, 112)),
+            "phoenix": ("PHOENIX FLOW RESTORED", (255, 120, 38)),
+        }
+        message, color = effects[pickup.kind]
+        if pickup.kind == "repair":
+            self.health = min(self.jet.hull, self.health + 30)
+        elif pickup.kind == "shield":
+            self.shield_timer = max(self.shield_timer, 8.0)
+        elif pickup.kind == "overdrive":
+            self.overdrive_timer = max(self.overdrive_timer, 8.0)
+        elif pickup.kind == "missile":
+            self.missile_charges += 2
+        elif pickup.kind == "phoenix":
+            if not self.phoenix.active:
+                self.flow.energy = self.flow.max_energy
+                self.flow.ready = True
+            else:
+                self.phoenix.remaining = min(50.0, self.phoenix.remaining + 8.0)
+        self.banner = message
+        self.banner_timer = 2.2
+        self.audio.play("ready")
+        self.burst(self.position, color, 18, 6)
+
     def update_enemies(self, dt):
         for enemy in self.enemies:
             enemy.flash = max(0, enemy.flash - dt)
@@ -282,9 +367,20 @@ class Game:
                 continue
             toward = offset / distance
             side = pygame.Vector2(-toward.y, toward.x)
+            if enemy.kind == "boss":
+                ratio = enemy.health / enemy.max_health
+                new_phase = 1 if ratio > 0.66 else 2 if ratio > 0.33 else 3
+                if new_phase != enemy.boss_phase:
+                    enemy.boss_phase = new_phase
+                    self.banner = f"{enemy.boss_name or 'BOSS'} / PHASE {new_phase}"
+                    self.banner_timer = 2.2
             if enemy.kind == "flanker":
                 movement = toward * (1 if distance > 330 else -0.3) + side * 0.9
-            elif enemy.kind in ("bomber", "boss"):
+            elif enemy.kind == "boss" and enemy.boss_phase == 3:
+                movement = toward * (1 if distance > 390 else -0.25) + side * 1.15
+            elif enemy.kind == "boss":
+                movement = toward * (1 if distance > 450 else -0.35) + side * (0.35 if enemy.boss_phase == 1 else 0.75)
+            elif enemy.kind == "bomber":
                 movement = toward * (1 if distance > 450 else -0.35) + side * 0.35
             else:
                 movement = toward * (1 if distance > 290 else -0.2) + side * math.sin(enemy.phase * 1.6) * 0.45
@@ -297,9 +393,17 @@ class Game:
             if distance < 650 and enemy.shot_timer <= 0:
                 lead = self.position + self.velocity * min(0.4, distance / 700) - enemy.position
                 direction = lead.normalize() if lead.length_squared() else toward
-                angles = (-14, 0, 14) if enemy.kind in ("bomber", "boss") else (0,)
-                for angle in angles:
-                    self.projectiles.append(Projectile(enemy.position + toward * 26, direction.rotate(angle) * 370, 8, "enemy", lifetime=2.7))
+                if enemy.kind == "boss" and enemy.boss_phase == 3:
+                    shot_directions = [pygame.Vector2(1, 0).rotate(enemy.phase * 20 + index * 45) for index in range(8)]
+                    shot_speed = 300
+                    shot_damage = 12
+                else:
+                    angles = (-14, 0, 14) if enemy.kind in ("bomber", "boss") else (0,)
+                    shot_directions = [direction.rotate(angle) for angle in angles]
+                    shot_speed = 370 if enemy.kind != "boss" else 400 + enemy.boss_phase * 25
+                    shot_damage = 8 if enemy.kind != "boss" else 8 + enemy.boss_phase * 2
+                for shot_direction in shot_directions:
+                    self.projectiles.append(Projectile(enemy.position + toward * 26, shot_direction * shot_speed, shot_damage, "enemy", lifetime=2.7))
                 enemy.shot_timer = self.rng.uniform(1.7, 2.5) / (1 + min(0.25, self.waves.wave * 0.015))
             if distance < enemy.radius + PLAYER_RADIUS:
                 self.damage(12)
@@ -312,23 +416,30 @@ class Game:
         direction = (target.position - self.position).normalize() if target else self.heading.copy()
         count = self.jet.shot_count
         center = (count - 1) / 2
+        damage = self.jet.damage * (1.35 if self.overdrive_timer > 0 else 1.0)
         for index in range(count):
             shot_direction = direction.rotate((index - center) * self.jet.spread)
-            self.projectiles.append(Projectile(self.position + self.heading * 34, shot_direction * self.jet.projectile_speed + self.velocity * 0.25, self.jet.damage, "player", lifetime=0.95))
-        self.cannon_cooldown = self.jet.interval
+            self.projectiles.append(Projectile(self.position + self.heading * 34, shot_direction * self.jet.projectile_speed + self.velocity * 0.25, damage, "player", lifetime=0.95))
+        self.cannon_cooldown = self.jet.interval * (0.62 if self.overdrive_timer > 0 else 1.0)
         self.burst(self.position + self.heading * 34, (255, 215, 120), 2, 3)
         self.audio.play("cannon")
 
     def fire_missile(self):
-        if self.missile_cooldown > 0 or not self.lock.ready:
+        if self.missile_cooldown > 0:
             return False
-        self.projectiles.append(Projectile(self.position + self.heading * 35, self.heading * 480, 85, "player", radius=7, lifetime=5, target=self.lock.target, missile=True))
+        target = self.lock.target if self.lock.ready else select_target(self.enemies, self.position, self.heading, 850, 42)
+        emergency = not self.lock.ready
+        if target is None or (emergency and self.missile_charges <= 0):
+            return False
+        self.projectiles.append(Projectile(self.position + self.heading * 35, self.heading * 480, 85, "player", radius=7, lifetime=5, target=target, missile=True))
+        if emergency:
+            self.missile_charges -= 1
         self.missile_cooldown = 2.4
         self.audio.play("missile")
         return True
 
     def damage(self, amount):
-        if self.phoenix.guarding or self.hit_cooldown > 0:
+        if self.phoenix.guarding or self.shield_timer > 0 or self.hit_cooldown > 0:
             return
         self.health = max(0, self.health - amount)
         self.hit_cooldown = 0.25
@@ -391,6 +502,7 @@ class Game:
                     self.flow.reward_maneuver(0, 0.05)
                 else:
                     self.flow.reward_maneuver(8, 0.05)
+                self.spawn_powerup(enemy.position, enemy.kind == "boss")
                 self.burst(enemy.position, (255, 169, 83), 32 if enemy.kind == "boss" else 19, 8)
                 self.rings.append((enemy.position.copy(), 0))
                 self.shake = max(self.shake, 4)
@@ -411,13 +523,20 @@ class Game:
             self.progress.earn(25 + self.waves.wave * 5)
             self.projectiles = [shot for shot in self.projectiles if shot.owner != "enemy"]
             reinforce_drones(self)
-            self.banner = "SECTOR CLEAR / +22 HULL / COINS AWARDED"
+            if self.waves.boss_wave:
+                self.progress.earn(250)
+                self.banner = f"SECTOR {self.waves.sector:02d} CLEARED / BOSS BONUS +250 / +22 HULL"
+            else:
+                self.banner = "WAVE CLEAR / +22 HULL / COINS AWARDED"
             self.banner_timer = 3
             self.audio.play("ready")
         elif action == "next":
             self.waves.begin()
             reinforce_drones(self)
-            self.banner = f"WAVE {self.waves.wave:02d} / {'BOSS INBOUND' if self.waves.wave % 10 == 0 else 'NEW CONTACTS'}"
+            if self.waves.wave_in_sector == 1:
+                self.banner = f"SECTOR {self.waves.sector:02d} / {self.waves.sector_name} / NEW FRONT"
+            else:
+                self.banner = f"WAVE {self.waves.wave_in_sector:02d} / {'BOSS INBOUND' if self.waves.boss_wave else self.waves.formation}"
             self.banner_timer = 2.5
 
 

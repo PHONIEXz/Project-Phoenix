@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from Game.progression import Progress, JETS
+from Game.progression import MAX_WEAPON_LEVEL, Progress, JETS
 
 
 class ProgressTests(unittest.TestCase):
@@ -78,6 +78,26 @@ class ProgressTests(unittest.TestCase):
         self.assertEqual(loaded.owned, {11})
         self.assertEqual(loaded.selected, 11)
         self.assertEqual(loaded.drone_slots, 2)
+
+    def test_weapon_upgrade_changes_stats_and_survives_reload(self):
+        self.progress.earn(1000)
+        before = self.progress.effective_jet(11)
+        success, message = self.progress.upgrade(11)
+        self.assertTrue(success, message)
+        after = self.progress.effective_jet(11)
+        self.assertGreater(after.damage, before.damage)
+        self.assertLess(after.interval, before.interval)
+        self.assertGreater(after.hull, before.hull)
+        loaded = Progress(self.path)
+        self.assertEqual(loaded.level(11), 2)
+        self.assertEqual(loaded.effective_jet(11).damage, after.damage)
+
+    def test_weapon_levels_stop_at_twelve(self):
+        self.progress.earn(50000)
+        for _ in range(MAX_WEAPON_LEVEL + 3):
+            self.progress.upgrade(11)
+        self.assertEqual(self.progress.level(11), MAX_WEAPON_LEVEL)
+        self.assertFalse(self.progress.upgrade(11)[0])
 
     def test_failed_atomic_replace_keeps_the_previous_save(self):
         self.progress.earn(1000)

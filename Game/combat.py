@@ -17,6 +17,8 @@ class Enemy:
     shot_timer: float = 1.5
     phase: float = 0.0
     flash: float = 0.0
+    boss_phase: int = 1
+    boss_name: str = ""
 
     @property
     def radius(self):

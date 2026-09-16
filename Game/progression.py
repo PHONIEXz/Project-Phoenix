@@ -39,6 +39,7 @@ JETS = (
 )
 JET_BY_INDEX = {jet.index: jet for jet in JETS}
 DRONE_PRICES = (350, 750)
+MAX_WEAPON_LEVEL = 12
 
 
 class Progress:
@@ -74,7 +75,11 @@ class Progress:
             self.drone_slots = min(2, max(0, slots)) if type(slots) is int else 0
             levels = data.get("levels", {})
             if isinstance(levels, dict):
-                self.levels = {int(index): min(5, max(1, int(level))) for index, level in levels.items() if str(index).lstrip("-").isdigit() and int(index) in JET_BY_INDEX}
+                self.levels = {
+                    int(index): min(MAX_WEAPON_LEVEL, max(1, int(level)))
+                    for index, level in levels.items()
+                    if str(index).lstrip("-").isdigit() and int(index) in JET_BY_INDEX
+                }
             self.levels[11] = max(1, self.levels.get(11, 1))
         except (OSError, ValueError, TypeError):
             # Preserve an unreadable file; never silently overwrite its contents.
@@ -100,7 +105,7 @@ class Progress:
         self.save()
 
     def level(self, index):
-        return min(5, max(1, int(self.levels.get(index, 1))))
+        return min(MAX_WEAPON_LEVEL, max(1, int(self.levels.get(index, 1))))
 
     def effective_jet(self, index):
         """Return the selected aircraft with its saved weapon upgrades applied."""
@@ -111,14 +116,16 @@ class Progress:
             hull=jet.hull + (level - 1) * 12,
             speed=jet.speed + (level - 1) * 7,
             damage=jet.damage + (level - 1) * 5,
-            interval=max(0.07, jet.interval - (level - 1) * 0.006),
+            interval=max(0.055, jet.interval - (level - 1) * 0.006),
+            shot_count=min(6, jet.shot_count + (level - 1) // 4),
+            projectile_speed=jet.projectile_speed + (level - 1) * 12,
         )
 
     def upgrade(self, index):
         if index not in self.owned:
             return False, "Buy this aircraft before upgrading it."
         level = self.level(index)
-        if level >= 5:
+        if level >= MAX_WEAPON_LEVEL:
             return False, "This aircraft is at maximum level."
         price = 160 + level * 140
         if self.coins < price:
