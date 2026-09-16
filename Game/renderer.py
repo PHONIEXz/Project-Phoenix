@@ -78,7 +78,9 @@ class Renderer:
         return surface
 
     def text(self, label, position, size=24, color=WHITE, center=False):
-        image = self.fonts[size].render(str(label), True, color)
+        # Cache requested sizes lazily so a new HUD label cannot crash the game.
+        font = self.fonts.setdefault(size, pygame.font.Font(None, size))
+        image = font.render(str(label), True, color)
         rect = image.get_rect(center=position) if center else image.get_rect(topleft=position)
         self.screen.blit(image, rect)
         return rect
