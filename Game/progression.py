@@ -35,11 +35,20 @@ JETS = (
     Jet(3, "Wraith", "Interceptor", 780, 95, 570, 22, 0.11, "Needle repeater", 2, 3, 1180),
     Jet(2, "Tempest", "Striker", 950, 105, 445, 38, 0.15, "Storm spread", 4, 12, 900),
     Jet(1, "Aegis", "Guardian", 1150, 190, 340, 29, 0.15, "Fortress lance", 1, 0, 860),
-    Jet(0, "Sunflare", "Balanced", 1400, 120, 480, 30, 0.12, "Solar burst", 3, 7, 1020),
+    # Ship 0000 is the end-of-hangar reward: it must feel like a real upgrade,
+    # not another cosmetic unlock.  Its annihilator has the highest base
+    # damage, hull, speed, and sustained firepower in the fleet.
+    Jet(0, "Sunflare", "Apex", 5000, 260, 600, 78, 0.08, "Solar annihilator", 4, 8, 1280),
 )
 JET_BY_INDEX = {jet.index: jet for jet in JETS}
 DRONE_PRICES = (350, 750)
 MAX_WEAPON_LEVEL = 12
+MAX_DRONE_LEVEL = 5
+
+
+def drone_upgrade_cost(level):
+    """Return the coin cost for the next shared drone systems level."""
+    return 400 + max(0, int(level) - 1) * 220
 
 
 class Progress:
@@ -50,6 +59,7 @@ class Progress:
         self.owned = {11}
         self.selected = 11
         self.drone_slots = 0
+        self.drone_level = 1
         self.levels = {11: 1}
         self.error = ""
         self.load()
@@ -73,6 +83,8 @@ class Progress:
             self.selected = selected if type(selected) is int and selected in self.owned else 11
             slots = data.get("drone_slots", 0)
             self.drone_slots = min(2, max(0, slots)) if type(slots) is int else 0
+            drone_level = data.get("drone_level", 1)
+            self.drone_level = min(MAX_DRONE_LEVEL, max(1, drone_level)) if type(drone_level) is int else 1
             levels = data.get("levels", {})
             if isinstance(levels, dict):
                 self.levels = {
@@ -91,7 +103,15 @@ class Progress:
         temporary = self.path.with_suffix(".json.tmp")
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            data = {"version": 2, "coins": self.coins, "owned": sorted(self.owned), "selected": self.selected, "drone_slots": self.drone_slots, "levels": self.levels}
+            data = {
+                "version": 2,
+                "coins": self.coins,
+                "owned": sorted(self.owned),
+                "selected": self.selected,
+                "drone_slots": self.drone_slots,
+                "drone_level": self.drone_level,
+                "levels": self.levels,
+            }
             temporary.write_text(json.dumps(data, indent=2) + "\n")
             temporary.replace(self.path)
             self.error = ""
@@ -177,3 +197,19 @@ class Progress:
             self.drone_slots -= 1
             return False, self.error
         return True, "Permanent support drone unlocked."
+
+    def upgrade_drones(self):
+        """Upgrade every unlocked drone with one shared, saved systems level."""
+        level = min(MAX_DRONE_LEVEL, max(1, int(self.drone_level)))
+        if level >= MAX_DRONE_LEVEL:
+            return False, "Drone systems are at maximum level."
+        price = drone_upgrade_cost(level)
+        if self.coins < price:
+            return False, f"Need {price - self.coins} more coins."
+        self.coins -= price
+        self.drone_level = level + 1
+        if not self.save():
+            self.coins += price
+            self.drone_level = level
+            return False, self.error
+        return True, f"Drone systems upgraded to level {level + 1}."

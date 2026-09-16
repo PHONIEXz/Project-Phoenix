@@ -10,7 +10,7 @@ from Game.audio import Audio
 from Game.combat import Enemy, Projectile, MissileLock, guide_missile, hit_fraction, segment_distance, select_target
 from Game.flight_system import FlightController
 from Game.mission import WaveDirector
-from Game.powerups import PowerUp, random_kind
+from Game.powerups import COLLECT_RADIUS, MAGNET_RADIUS, MAGNET_SPEED, PowerUp, random_kind
 from Game.phoenix_flow import PhoenixFlow
 from Game.progression import Progress, JETS, JET_BY_INDEX
 from Game.renderer import Renderer
@@ -119,6 +119,11 @@ class Game:
             self.apply_jet()
             self.health = min(self.jet.hull, self.jet.hull * ratio)
 
+    def hangar_drone_upgrade(self):
+        success, self.shop_message = self.progress.upgrade_drones()
+        if success:
+            reinforce_drones(self)
+
     def event(self, event):
         if event.type == pygame.QUIT:
             self.running = False
@@ -134,6 +139,8 @@ class Game:
                 self.hangar_purchase()
             elif self.renderer.hangar_upgrade_button().collidepoint(event.pos):
                 self.hangar_upgrade()
+            elif self.renderer.drone_upgrade_button().collidepoint(event.pos):
+                self.hangar_drone_upgrade()
             elif self.renderer.drone_buy_button().collidepoint(event.pos):
                 success, self.shop_message = self.progress.buy_drone()
                 if success:
@@ -157,6 +164,8 @@ class Game:
                     self.hangar_purchase()
                 elif event.key == pygame.K_i:
                     self.hangar_upgrade()
+                elif event.key == pygame.K_o:
+                    self.hangar_drone_upgrade()
                 elif event.key == pygame.K_u:
                     success, self.shop_message = self.progress.buy_drone()
                     if success:
@@ -323,7 +332,15 @@ class Game:
             pickup.phase += dt
             if pickup.lifetime <= 0:
                 continue
-            if pickup.position.distance_to(self.position) <= 52:
+            offset = self.position - pickup.position
+            distance = offset.length()
+            if 0 < distance <= MAGNET_RADIUS:
+                # Pull drops toward the jet with a soft speed ramp.  This is
+                # deliberately local, so steering still matters for distant
+                # drops while thrusting no longer makes close drops miss.
+                pull_speed = MAGNET_SPEED + (MAGNET_RADIUS - distance) * 2.4
+                pickup.position += offset / distance * min(distance, pull_speed * dt)
+            if pickup.position.distance_to(self.position) <= COLLECT_RADIUS:
                 self.collect_powerup(pickup)
                 continue
             survivors.append(pickup)

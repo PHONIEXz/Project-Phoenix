@@ -47,6 +47,7 @@ On Windows, activate with `.venv\Scripts\activate`.
 | E | Spend full Phoenix energy to summon the bird for 50 seconds |
 | B | Switch Phoenix between Attack and Guard modes |
 | H | Open the hangar; gameplay pauses while shopping |
+| O in hangar | Upgrade all unlocked drone systems |
 | M | Mute or unmute effects |
 | P / Esc | Pause or resume |
 | R after defeat | Restart |
@@ -68,7 +69,7 @@ Coins are earned through play, without real-money purchases. A regular aircraft 
 
 Aircraft are not cosmetic-only. Each jet has a distinct weapon system: repeaters fire twin bolts, spread systems fire multiple angled shots, and siege or lance systems trade rate of fire for heavier hits. In the hangar, select an owned jet and press **I** to buy a weapon upgrade. Up to twelve levels increase its damage, reload speed, hull, top speed, and projectile speed; every fourth level can add another bolt. The detail panel shows the weapon name, shot count, level, and live stats.
 
-Destroyed aircraft can drop temporary pickups. Collect them by flying over them: green **REPAIR** restores hull, blue **SHIELD** blocks damage for eight seconds, gold **OVERDRIVE** boosts cannon damage and reload, red **MISSILES** adds two emergency missiles, and orange **PHOENIX** fills the Phoenix meter or extends an active bird. Bosses always drop one pickup.
+Destroyed aircraft can drop temporary pickups. A pickup begins flying toward you inside a 260-pixel magnetic radius, then collects automatically inside 52 pixels, so a thrusting pass does not throw away a nearby reward. Green **REPAIR** restores hull, blue **SHIELD** blocks damage for eight seconds, gold **OVERDRIVE** boosts cannon damage and reload, red **MISSILES** adds two emergency missiles, and orange **PHOENIX** fills the Phoenix meter or extends an active bird. Bosses always drop one pickup.
 
 Press H for the hangar. Click a jet card or use A/D to select it, then click Buy/Equip or press Enter. Jet roles trade hull, speed, and cannon strength. Equipping during a sortie preserves the percentage of hull remaining, so changing jets cannot provide free repairs. New sorties start with the equipped jet at full hull.
 
@@ -85,9 +86,9 @@ Press H for the hangar. Click a jet card or use A/D to select it, then click Buy
 | 0003 | Wraith | Interceptor | 780 |
 | 0002 | Tempest | Striker | 950 |
 | 0001 | Aegis | Guardian | 1150 |
-| 0000 | Sunflare | Balanced | 1400 |
+| 0000 | Sunflare | Apex | 5000 |
 
-Every sortie has one free, invulnerable escort drone. It orbits the player and automatically fires at nearby aircraft. Buy two additional permanent drone slots for 350 and 750 coins using U or the hangar button. All unlocked drones arrive again each wave; their firepower grows with the wave number, up to a cap.
+Every sortie has one free, invulnerable **Gunner** drone. Buy two additional permanent drone slots for 350 and 750 coins using U or the hangar button; the second and third slots add an **Interceptor** and **Guardian** role with different orbit speeds, ranges, projectile speeds, and damage. Upgrade all unlocked drones through five saved systems levels with O or the hangar button. All unlocked drones arrive again each wave; their firepower also scales with the wave number.
 
 Progress is saved atomically after rewards and purchases in `Data/progress.json`, which is excluded from Git. Save errors appear in the HUD or hangar. Purchases roll back if saving fails. An unreadable existing save is preserved; back it up before repairing or moving it to start fresh. Tests use temporary save locations and never spend your actual game coins.
 

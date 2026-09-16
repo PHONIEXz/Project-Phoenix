@@ -13,6 +13,13 @@ POWERUP_INFO = {
     "phoenix": ("PHOENIX", (255, 120, 38)),
 }
 
+# Pickups are still earned by flying near them, but the pull starts early
+# enough that thrusting past a drop does not make it feel lost.  The collect
+# radius stays small so the magnet is helpful rather than map-wide.
+MAGNET_RADIUS = 260.0
+MAGNET_SPEED = 280.0
+COLLECT_RADIUS = 52.0
+
 
 @dataclass
 class PowerUp:

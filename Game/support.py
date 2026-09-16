@@ -15,6 +15,11 @@ GUARD_RADIUS = 185.0
 class Drone:
     position: pygame.Vector2 = field(default_factory=pygame.Vector2)
     cooldown: float = 0.3
+    # Each slot has a readable battlefield job.  ``role`` and ``level`` are
+    # appended after the original fields so old saves/tests can still create
+    # Drone(position, cooldown) safely.
+    role: str = "gunner"
+    level: int = 1
 
 
 class Phoenix:
@@ -86,18 +91,40 @@ class Phoenix:
 
 def reinforce_drones(game):
     """One free drone plus purchased slots; reinforcements arrive each wave."""
-    game.drones = [Drone(game.position.copy(), 0.3 + i * 0.18) for i in range(1 + game.progress.drone_slots)]
+    roles = ("gunner", "interceptor", "guardian")
+    level = max(1, int(getattr(game.progress, "drone_level", 1)))
+    game.drones = [
+        Drone(game.position.copy(), 0.3 + i * 0.18, roles[i], level)
+        for i in range(min(3, 1 + game.progress.drone_slots))
+    ]
 
 
 def update_drones(game, dt):
+    if not game.drones:
+        return
     for index, drone in enumerate(game.drones):
-        angle = game.time * 1.1 + index * math.tau / len(game.drones)
-        drone.position = game.position + pygame.Vector2(math.cos(angle), math.sin(angle)) * 80
+        role = getattr(drone, "role", "gunner")
+        level = max(1, int(getattr(drone, "level", getattr(game.progress, "drone_level", 1))))
+        orbit_radius = {"gunner": 80, "interceptor": 94, "guardian": 72}.get(role, 80)
+        orbit_speed = {"gunner": 1.1, "interceptor": 1.45, "guardian": 0.82}.get(role, 1.1)
+        angle = game.time * orbit_speed + index * math.tau / len(game.drones)
+        drone.position = game.position + pygame.Vector2(math.cos(angle), math.sin(angle)) * orbit_radius
         drone.cooldown = max(0, drone.cooldown - dt)
-        target = min((enemy for enemy in game.enemies if enemy.health > 0 and enemy.position.distance_to(drone.position) <= 520), key=lambda enemy: enemy.position.distance_squared_to(drone.position), default=None)
+        target_range = {"gunner": 520, "interceptor": 700, "guardian": 580}.get(role, 520)
+        target = min(
+            (enemy for enemy in game.enemies if enemy.health > 0 and enemy.position.distance_to(drone.position) <= target_range),
+            key=lambda enemy: enemy.position.distance_squared_to(drone.position),
+            default=None,
+        )
         if target is not None and drone.cooldown <= 0:
             offset = target.position - drone.position
             if offset.length_squared():
-                damage = 14 + min(9, game.waves.wave * 0.8)
-                game.projectiles.append(Projectile(drone.position.copy(), offset.normalize() * 800, damage, "drone", radius=4, lifetime=0.85))
-                drone.cooldown = 0.8
+                wave = getattr(getattr(game, "waves", None), "wave", 1)
+                base_damage = {"gunner": 14, "interceptor": 20, "guardian": 11}.get(role, 14)
+                damage = base_damage + min(12, wave * 0.8) + (level - 1) * 5
+                projectile_speed = {"gunner": 800, "interceptor": 930, "guardian": 730}.get(role, 800)
+                radius = 5 if role == "guardian" else 4
+                lifetime = 1.1 if role == "interceptor" else 0.95
+                game.projectiles.append(Projectile(drone.position.copy(), offset.normalize() * projectile_speed, damage, "drone", radius=radius, lifetime=lifetime))
+                base_cooldown = {"gunner": 0.8, "interceptor": 0.58, "guardian": 0.98}.get(role, 0.8)
+                drone.cooldown = max(0.26, base_cooldown - (level - 1) * 0.065)

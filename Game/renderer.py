@@ -5,7 +5,8 @@ import random
 from pathlib import Path
 
 import pygame
-from Game.progression import JETS, DRONE_PRICES, MAX_WEAPON_LEVEL
+from Game.powerups import MAGNET_RADIUS
+from Game.progression import JETS, DRONE_PRICES, MAX_DRONE_LEVEL, MAX_WEAPON_LEVEL, drone_upgrade_cost
 from Game.support import GUARD_RADIUS
 
 INK = (10, 19, 29)
@@ -148,7 +149,7 @@ class Renderer:
         for pos, age in game.rings:
             pygame.draw.circle(self.screen, GOLD if age < 0.2 else (164, 117, 76), pos - offset, round(18 + age * 115), 2)
         for pickup in game.powerups:
-            self.powerup(pickup, offset)
+            self.powerup(pickup, offset, game.position)
 
         for enemy in game.enemies:
             pos = enemy.position - offset
@@ -167,7 +168,7 @@ class Renderer:
 
         if game.state != "menu":
             for drone in game.drones:
-                self.drone(drone.position - offset, game.time)
+                self.drone(drone.position - offset, game.time, getattr(drone, "role", "gunner"), getattr(drone, "level", 1))
             if game.phoenix.active:
                 self.phoenix_bird(game.phoenix.position - offset, game.phoenix.heading, game.time)
 
@@ -285,6 +286,8 @@ class Renderer:
             effects.append(f"OVERDRIVE {game.overdrive_timer:.0f}s")
         if game.missile_charges:
             effects.append(f"EMERGENCY MISSILES {game.missile_charges}")
+        if any(pickup.position.distance_to(game.position) <= MAGNET_RADIUS for pickup in game.powerups):
+            effects.append("AUTO-PICKUP ACTIVE")
         if effects:
             self.text(" / ".join(effects), (self.width / 2, self.height - 151), 18, GOLD, True)
         self.text(f"{len(game.drones)} DRONE{'S' if len(game.drones) != 1 else ''} / H HANGAR", (self.width / 2, self.height - 27), 18, TEAL, True)
@@ -330,21 +333,33 @@ class Renderer:
         label = "P / ESC RESUME  /  H HANGAR" if game.state == "paused" else "R FLY AGAIN  /  H HANGAR  /  Q MENU"
         self.text(label, (center, self.height / 2 + 57), 24, TEAL, True)
 
-    def drone(self, position, time):
+    def drone(self, position, time, role="gunner", level=1):
+        colors = {
+            "gunner": TEAL,
+            "interceptor": (126, 178, 255),
+            "guardian": GOLD,
+        }
+        core_color = colors.get(role, TEAL)
         for delta in ((-11, -8), (11, -8), (-11, 8), (11, 8)):
             pos = position + pygame.Vector2(delta)
             pygame.draw.line(self.screen, (102, 182, 193), position, pos, 2)
             pygame.draw.circle(self.screen, (22, 63, 77), pos, 6)
-            pygame.draw.line(self.screen, TEAL, pos - pygame.Vector2(5, math.sin(time * 30) * 3), pos + pygame.Vector2(5, math.sin(time * 30) * 3), 1)
-        pygame.draw.polygon(self.screen, TEAL, [position + pygame.Vector2(0, -9), position + pygame.Vector2(7, 0), position + pygame.Vector2(0, 9), position + pygame.Vector2(-7, 0)])
+            pygame.draw.line(self.screen, core_color, pos - pygame.Vector2(5, math.sin(time * 30) * 3), pos + pygame.Vector2(5, math.sin(time * 30) * 3), 1)
+        pygame.draw.polygon(self.screen, core_color, [position + pygame.Vector2(0, -9), position + pygame.Vector2(7, 0), position + pygame.Vector2(0, 9), position + pygame.Vector2(-7, 0)])
+        if role == "guardian":
+            pygame.draw.circle(self.screen, (255, 194, 94), position, 15, 1)
+        elif role == "interceptor":
+            pygame.draw.line(self.screen, core_color, position + pygame.Vector2(-12, 0), position + pygame.Vector2(12, 0), 2)
         pygame.draw.circle(self.screen, WHITE, position, 2)
 
-    def powerup(self, pickup, offset):
+    def powerup(self, pickup, offset, player_position=None):
         position = pickup.position - offset
         if not (-60 < position.x < self.width + 60 and -60 < position.y < self.height + 60):
             return
         bob = math.sin(pickup.phase * 5) * 4
         position.y += bob
+        if player_position is not None and pickup.position.distance_to(player_position) <= MAGNET_RADIUS:
+            pygame.draw.circle(self.screen, (*pickup.color, 70), position, 28, 1)
         pygame.draw.circle(self.screen, (20, 38, 47), position, 24)
         pygame.draw.circle(self.screen, pickup.color, position, 20, 3)
         pygame.draw.circle(self.screen, pickup.color, position, 7)
@@ -376,6 +391,9 @@ class Renderer:
 
     def drone_buy_button(self):
         return pygame.Rect(567, self.height - 146, 255, 47)
+
+    def drone_upgrade_button(self):
+        return pygame.Rect(292, self.height - 146, 255, 47)
 
     def hangar_back_button(self):
         return pygame.Rect(self.width - 238, 30, 198, 42)
@@ -422,11 +440,17 @@ class Renderer:
         self.text(upgrade_label, upgrade.center, 16, INK if level < MAX_WEAPON_LEVEL and base_jet.index in game.progress.owned else MUTED, True)
         panel = pygame.Rect(28, self.height - 164, 814, 87)
         self.panel(panel)
-        self.text(f"DRONE SUPPORT / {1 + game.progress.drone_slots} OF 3", (46, panel.y + 15), 24, TEAL)
-        self.text("One free escort. Purchased drones stay unlocked.", (46, panel.y + 49), 21, MUTED)
+        self.text(f"DRONE SUPPORT / {1 + game.progress.drone_slots} OF 3 / LEVEL {game.progress.drone_level}", (46, panel.y + 15), 21, TEAL)
+        self.text("GUNNER / INTERCEPTOR / GUARDIAN roles unlock with each slot.", (46, panel.y + 49), 16, MUTED)
+        upgrade = self.drone_upgrade_button()
+        upgrade_level = game.progress.drone_level
+        upgrade_ready = upgrade_level < MAX_DRONE_LEVEL
+        pygame.draw.rect(self.screen, TEAL if upgrade_ready else (52, 105, 118), upgrade, border_radius=8)
+        upgrade_label = "MAX DRONE LEVEL" if not upgrade_ready else f"UPGRADE DRONES / {drone_upgrade_cost(upgrade_level)} / O"
+        self.text(upgrade_label, upgrade.center, 16, INK if upgrade_ready else MUTED, True)
         button = self.drone_buy_button()
         pygame.draw.rect(self.screen, GOLD, button, border_radius=8)
         label = "ALL DRONES UNLOCKED" if game.progress.drone_slots == 2 else f"BUY DRONE / {DRONE_PRICES[game.progress.drone_slots]} / U"
         self.text(label, button.center, 18, INK, True)
-        message = game.progress.error or game.shop_message or "A/D select / Enter buy or equip / I upgrade weapon / U buy drone / Esc return"
+        message = game.progress.error or game.shop_message or "A/D select / Enter buy or equip / I weapon upgrade / O drone upgrade / U buy drone / Esc return"
         self.text(message, (30, self.height - 48), 18, RED if game.progress.error else WHITE)

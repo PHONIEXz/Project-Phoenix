@@ -14,6 +14,7 @@ from MainContents import Game, WORLD_SIZE
 from Game.combat import Enemy, Projectile
 from Game.renderer import Renderer
 from Game.progression import Progress
+from Game.powerups import PowerUp
 from Game.support import GUARD_RADIUS, reinforce_drones
 
 
@@ -219,6 +220,27 @@ class GameTests(unittest.TestCase):
         self.game.waves.remaining = 0
         self.tick()
         self.assertEqual(len(self.game.drones), 3)
+
+    def test_nearby_powerups_are_pulled_into_auto_pickup(self):
+        self.game.health = 50
+        pickup = PowerUp(self.game.position + pygame.Vector2(180, 0), "repair")
+        self.game.powerups = [pickup]
+        initial_distance = pickup.position.distance_to(self.game.position)
+        self.game.update_powerups(0.1)
+        self.assertLess(pickup.position.distance_to(self.game.position), initial_distance)
+        for _ in range(20):
+            self.game.update_powerups(0.05)
+        self.assertEqual(self.game.powerups, [])
+        self.assertGreater(self.game.health, 50)
+
+    def test_drone_slots_have_distinct_roles_and_saved_level(self):
+        self.game.progress.earn(1900)
+        self.game.progress.buy_drone()
+        self.game.progress.buy_drone()
+        self.game.progress.upgrade_drones()
+        reinforce_drones(self.game)
+        self.assertEqual([drone.role for drone in self.game.drones], ["gunner", "interceptor", "guardian"])
+        self.assertTrue(all(drone.level == 2 for drone in self.game.drones))
 
     def test_phoenix_lasts_fifty_simulation_seconds_and_pauses(self):
         self.game.flow.reward_maneuver(100)

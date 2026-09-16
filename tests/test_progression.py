@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from Game.progression import MAX_WEAPON_LEVEL, Progress, JETS
+from Game.progression import MAX_DRONE_LEVEL, MAX_WEAPON_LEVEL, Progress, JETS, drone_upgrade_cost
 
 
 class ProgressTests(unittest.TestCase):
@@ -20,6 +20,17 @@ class ProgressTests(unittest.TestCase):
         self.assertEqual([jet.index for jet in JETS], list(range(11, -1, -1)))
         self.assertGreater(len({jet.role for jet in JETS}), 3)
         self.assertEqual(self.progress.owned, {11})
+
+    def test_final_aircraft_is_the_strongest_and_costs_more(self):
+        top = JETS[-1]
+        others = JETS[:-1]
+        self.assertEqual(top.index, 0)
+        self.assertGreater(top.price, max(jet.price for jet in others))
+        self.assertGreater(top.hull, max(jet.hull for jet in others))
+        self.assertGreater(top.speed, max(jet.speed for jet in others))
+        self.assertGreater(top.damage, max(jet.damage for jet in others))
+        top_dps = top.damage * top.shot_count / top.interval
+        self.assertGreater(top_dps, max(jet.damage * jet.shot_count / jet.interval for jet in others))
 
     def test_coins_aircraft_and_drones_survive_reload(self):
         self.progress.earn(1000)
@@ -98,6 +109,21 @@ class ProgressTests(unittest.TestCase):
             self.progress.upgrade(11)
         self.assertEqual(self.progress.level(11), MAX_WEAPON_LEVEL)
         self.assertFalse(self.progress.upgrade(11)[0])
+
+    def test_drone_system_level_survives_reload(self):
+        self.progress.earn(drone_upgrade_cost(1))
+        self.assertTrue(self.progress.upgrade_drones()[0])
+        self.assertEqual(self.progress.drone_level, 2)
+        loaded = Progress(self.path)
+        self.assertEqual(loaded.drone_level, 2)
+        self.assertEqual(loaded.coins, 0)
+
+    def test_drone_system_levels_stop_at_maximum(self):
+        self.progress.earn(50000)
+        for _ in range(MAX_DRONE_LEVEL + 2):
+            self.progress.upgrade_drones()
+        self.assertEqual(self.progress.drone_level, MAX_DRONE_LEVEL)
+        self.assertFalse(self.progress.upgrade_drones()[0])
 
     def test_failed_atomic_replace_keeps_the_previous_save(self):
         self.progress.earn(1000)
