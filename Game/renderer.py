@@ -440,8 +440,8 @@ class Renderer:
         self.text(upgrade_label, upgrade.center, 16, INK if level < MAX_WEAPON_LEVEL and base_jet.index in game.progress.owned else MUTED, True)
         panel = pygame.Rect(28, self.height - 164, 814, 87)
         self.panel(panel)
-        self.text(f"DRONE SUPPORT / {1 + game.progress.drone_slots} OF 3 / LEVEL {game.progress.drone_level}", (46, panel.y + 15), 21, TEAL)
-        self.text("GUNNER / INTERCEPTOR / GUARDIAN roles unlock with each slot.", (46, panel.y + 49), 16, MUTED)
+        self.text(f"DRONES {1 + game.progress.drone_slots}/3 / SYSTEMS LV {game.progress.drone_level}", (46, panel.y + 15), 21, TEAL)
+        self.text("GUNNER / INTERCEPTOR / GUARDIAN", (46, panel.y + 49), 14, MUTED)
         upgrade = self.drone_upgrade_button()
         upgrade_level = game.progress.drone_level
         upgrade_ready = upgrade_level < MAX_DRONE_LEVEL
