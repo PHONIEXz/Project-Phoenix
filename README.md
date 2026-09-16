@@ -56,7 +56,7 @@ The cannon assists within a narrow 12-degree half-angle and 620-pixel targeting 
 
 ## Missions and Phoenix Flow
 
-Clear all incoming aircraft to finish a wave. A six-second repair break restores up to 22 hull points, then the next wave begins. Waves grow to at most 20 total enemies, with no more than six active at once. Every ninth wave starts with a boss. Hunters weave, flankers circle, and bombers fire spread shots.
+Clear all incoming aircraft to finish a wave. A six-second repair break restores up to 22 hull points, then the next wave begins. Waves grow to at most 20 total enemies, with no more than six active at once. Every tenth wave starts with a boss. Hunters weave, flankers circle, and bombers fire spread shots.
 
 Fast flying slowly builds Phoenix energy. Close evades and defeated aircraft build energy and a Flow multiplier up to x3. Damage breaks Flow. Full energy summons Phoenix for 50 seconds of simulation time. Attack mode hunts aircraft with powerful homing fire. Guard mode creates a 185-pixel no-go area, repels enemies, intercepts hostile shots, and protects against contact damage. Press B to switch modes before or during activation. The timer freezes while paused or in the hangar; Phoenix energy cannot rebuild while the bird is active. Defeated aircraft award 100 score; a boss awards 1,000.
 
@@ -64,7 +64,9 @@ The radar maps the whole sector and red edge arrows point toward offscreen aircr
 
 ## Coins, aircraft, and drone support
 
-Coins are earned through play, without real-money purchases. A regular aircraft awards 18 coins, a boss awards 150, and a cleared wave awards 25 + 5 x wave number. Coins, owned aircraft, the equipped jet, and purchased drone slots survive defeat and new sorties.
+Coins are earned through play, without real-money purchases. A regular aircraft awards 18 coins, a boss awards 150, and a cleared wave awards 25 + 5 x wave number. Coins, owned aircraft, the equipped jet, purchased weapon levels, and purchased drone slots survive defeat and new sorties.
+
+Aircraft are not cosmetic-only. Each jet has a distinct weapon system: repeaters fire twin bolts, spread systems fire multiple angled shots, and siege or lance systems trade rate of fire for heavier hits. In the hangar, select an owned jet and press **I** to buy a weapon upgrade. Up to five levels increase its damage, reload speed, hull, and top speed. The detail panel shows the weapon name, shot count, level, and live stats.
 
 Press H for the hangar. Click a jet card or use A/D to select it, then click Buy/Equip or press Enter. Jet roles trade hull, speed, and cannon strength. Equipping during a sortie preserves the percentage of hull remaining, so changing jets cannot provide free repairs. New sorties start with the equipped jet at full hull.
 

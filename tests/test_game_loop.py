@@ -166,8 +166,8 @@ class GameTests(unittest.TestCase):
             self.tick()
         self.assertEqual(self.game.waves.wave, 2)
 
-    def test_ninth_wave_spawns_exactly_one_boss(self):
-        self.game.waves.wave = 8
+    def test_tenth_wave_spawns_exactly_one_boss(self):
+        self.game.waves.wave = 9
         self.game.waves.begin()
         self.game.update_waves(0.016)
         self.assertEqual(self.game.enemies[0].kind, "boss")

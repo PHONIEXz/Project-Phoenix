@@ -331,6 +331,9 @@ class Renderer:
     def hangar_buy_button(self):
         return pygame.Rect(self.width - 390, 467, 350, 49)
 
+    def hangar_upgrade_button(self):
+        return pygame.Rect(self.width - 390, 522, 350, 38)
+
     def drone_buy_button(self):
         return pygame.Rect(567, self.height - 146, 255, 47)
 
@@ -356,20 +359,27 @@ class Renderer:
             self.text(jet.role, (card.x + 85, card.y + 46), 18, MUTED)
             state = "EQUIPPED" if jet.index == game.progress.selected else "OWNED" if jet.index in game.progress.owned else f"{jet.price} COINS"
             self.text(state, (card.x + 15, card.y + 94), 18, TEAL if jet.index in game.progress.owned else GOLD)
-        jet = JETS[game.hangar_selection]
+        base_jet = JETS[game.hangar_selection]
+        jet = game.progress.effective_jet(base_jet.index)
         detail = pygame.Rect(self.width - 410, 112, 390, 420)
         self.panel(detail)
         self.text(jet.name.upper(), (detail.centerx, 149), 34, GOLD, True)
         preview = pygame.transform.scale(self.jet_sprites[jet.index], (132, 132))
         self.screen.blit(preview, preview.get_rect(center=(detail.centerx, 235)))
-        self.text(f"{jet.role.upper()} / SHIP {jet.index:04d}", (detail.centerx, 313), 21, TEAL, True)
-        self.text(f"HULL {jet.hull}   /   SPEED {jet.speed}", (detail.x + 25, 350), 24)
-        self.text(f"CANNON {jet.damage} / {1 / jet.interval:.1f} SHOTS PER SEC", (detail.x + 25, 385), 21)
-        self.text("Choose a role that fits your flying.", (detail.x + 25, 422), 21, MUTED)
+        level = game.progress.level(jet.index)
+        self.text(f"{jet.role.upper()} / LEVEL {level} / SHIP {jet.index:04d}", (detail.centerx, 313), 20, TEAL, True)
+        self.text(f"HULL {jet.hull}   /   SPEED {jet.speed}", (detail.x + 25, 350), 22)
+        self.text(f"{jet.weapon.upper()} / {jet.damage} DAMAGE", (detail.x + 25, 383), 20)
+        self.text(f"{jet.shot_count} SHOT{'S' if jet.shot_count != 1 else ''} / {1 / jet.interval:.1f} PER SEC", (detail.x + 25, 414), 20, MUTED)
+        self.text("Each level improves hull, speed, damage and reload.", (detail.x + 25, 445), 17, MUTED)
         buy = self.hangar_buy_button()
-        pygame.draw.rect(self.screen, TEAL if jet.index in game.progress.owned else GOLD, buy, border_radius=8)
-        label = "EQUIP / ENTER" if jet.index in game.progress.owned else f"BUY & EQUIP / {jet.price} COINS"
+        pygame.draw.rect(self.screen, TEAL if base_jet.index in game.progress.owned else GOLD, buy, border_radius=8)
+        label = "EQUIP / ENTER" if base_jet.index in game.progress.owned else f"BUY & EQUIP / {base_jet.price} COINS"
         self.text(label, buy.center, 21, INK, True)
+        upgrade = self.hangar_upgrade_button()
+        pygame.draw.rect(self.screen, GOLD if level < 5 and base_jet.index in game.progress.owned else (52, 105, 118), upgrade, border_radius=7)
+        upgrade_label = "MAX WEAPON LEVEL" if level >= 5 else f"UPGRADE WEAPON / {160 + level * 140} COINS / I"
+        self.text(upgrade_label, upgrade.center, 16, INK if level < 5 and base_jet.index in game.progress.owned else MUTED, True)
         panel = pygame.Rect(28, self.height - 164, 814, 87)
         self.panel(panel)
         self.text(f"DRONE SUPPORT / {1 + game.progress.drone_slots} OF 3", (46, panel.y + 15), 24, TEAL)
@@ -378,5 +388,5 @@ class Renderer:
         pygame.draw.rect(self.screen, GOLD, button, border_radius=8)
         label = "ALL DRONES UNLOCKED" if game.progress.drone_slots == 2 else f"BUY DRONE / {DRONE_PRICES[game.progress.drone_slots]} / U"
         self.text(label, button.center, 18, INK, True)
-        message = game.progress.error or game.shop_message or "A/D select / Enter buy or equip / U buy drone / Esc return"
-        self.text(message, (30, self.height - 48), 21, RED if game.progress.error else WHITE)
+        message = game.progress.error or game.shop_message or "A/D select / Enter buy or equip / I upgrade weapon / U buy drone / Esc return"
+        self.text(message, (30, self.height - 48), 18, RED if game.progress.error else WHITE)

@@ -1,4 +1,4 @@
-"""Finite waves with a quiet repair interval and a boss every ninth wave."""
+"""Finite waves with a quiet repair interval and a boss every tenth wave."""
 
 class WaveDirector:
     def __init__(self):

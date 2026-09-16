@@ -45,7 +45,7 @@ class Game:
         self.velocity = pygame.Vector2()
         self.heading = pygame.Vector2(1, 0)
         self.flight = FlightController()
-        self.jet = JET_BY_INDEX[self.progress.selected]
+        self.jet = self.progress.effective_jet(self.progress.selected)
         self.apply_jet()
         self.flow = PhoenixFlow()
         self.phoenix = Phoenix()
@@ -95,13 +95,22 @@ class Game:
                 return
         if self.progress.equip(jet.index):
             ratio = self.health / self.jet.hull
-            self.jet = jet
+            self.jet = self.progress.effective_jet(jet.index)
             self.apply_jet()
             # Switching aircraft preserves damage instead of providing free heals.
             self.health = self.jet.hull * ratio
             self.shop_message = f"{jet.name} equipped."
         else:
             self.shop_message = self.progress.error
+
+    def hangar_upgrade(self):
+        jet = JETS[self.hangar_selection]
+        success, self.shop_message = self.progress.upgrade(jet.index)
+        if success and jet.index == self.progress.selected:
+            ratio = self.health / self.jet.hull
+            self.jet = self.progress.effective_jet(jet.index)
+            self.apply_jet()
+            self.health = min(self.jet.hull, self.jet.hull * ratio)
 
     def event(self, event):
         if event.type == pygame.QUIT:
@@ -116,6 +125,8 @@ class Game:
                     break
             if self.renderer.hangar_buy_button().collidepoint(event.pos):
                 self.hangar_purchase()
+            elif self.renderer.hangar_upgrade_button().collidepoint(event.pos):
+                self.hangar_upgrade()
             elif self.renderer.drone_buy_button().collidepoint(event.pos):
                 success, self.shop_message = self.progress.buy_drone()
                 if success:
@@ -137,6 +148,8 @@ class Game:
                     self.shop_message = ""
                 elif event.key == pygame.K_RETURN:
                     self.hangar_purchase()
+                elif event.key == pygame.K_i:
+                    self.hangar_upgrade()
                 elif event.key == pygame.K_u:
                     success, self.shop_message = self.progress.buy_drone()
                     if success:
@@ -176,7 +189,7 @@ class Game:
         self.particles = self.particles[-450:]
 
     def spawn_enemy(self):
-        boss = self.waves.wave % 9 == 0 and self.waves.remaining == self.waves.total - 1
+        boss = self.waves.wave % 10 == 0 and self.waves.remaining == self.waves.total - 1
         kinds = ["hunter"] if self.waves.wave == 1 else ["hunter", "flanker", "bomber"]
         kind = "boss" if boss else self.rng.choice(kinds)
         # Reject out-of-map spawns instead of clamping them onto a nearby jet.
@@ -297,7 +310,11 @@ class Game:
             return
         target = select_target(self.enemies, self.position, self.heading, 620, 12)
         direction = (target.position - self.position).normalize() if target else self.heading.copy()
-        self.projectiles.append(Projectile(self.position + self.heading * 34, direction * 1000 + self.velocity * 0.25, self.jet.damage, "player", lifetime=0.8))
+        count = self.jet.shot_count
+        center = (count - 1) / 2
+        for index in range(count):
+            shot_direction = direction.rotate((index - center) * self.jet.spread)
+            self.projectiles.append(Projectile(self.position + self.heading * 34, shot_direction * self.jet.projectile_speed + self.velocity * 0.25, self.jet.damage, "player", lifetime=0.95))
         self.cannon_cooldown = self.jet.interval
         self.burst(self.position + self.heading * 34, (255, 215, 120), 2, 3)
         self.audio.play("cannon")
@@ -400,7 +417,7 @@ class Game:
         elif action == "next":
             self.waves.begin()
             reinforce_drones(self)
-            self.banner = f"WAVE {self.waves.wave:02d} / {'BOSS INBOUND' if self.waves.wave % 9 == 0 else 'NEW CONTACTS'}"
+            self.banner = f"WAVE {self.waves.wave:02d} / {'BOSS INBOUND' if self.waves.wave % 10 == 0 else 'NEW CONTACTS'}"
             self.banner_timer = 2.5
 
 
