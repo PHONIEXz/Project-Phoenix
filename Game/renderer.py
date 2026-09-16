@@ -23,7 +23,7 @@ class Renderer:
         self.screen = screen
         self.width, self.height = screen.get_size()
         report("Loading fonts and aircraft")
-        self.fonts = {size: pygame.font.Font(None, size) for size in (18, 21, 24, 28, 34, 48, 80, 116)}
+        self.fonts = {size: pygame.font.Font(None, size) for size in (18, 19, 21, 24, 28, 34, 48, 80, 116)}
         ships = Path(__file__).resolve().parents[1] / "Assets" / "Jets" / "Ships"
         raw_ships = {jet.index: pygame.image.load(str(ships / f"ship_{jet.index:04d}.png")).convert_alpha() for jet in JETS}
         self.sprites = {
