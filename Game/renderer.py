@@ -259,6 +259,8 @@ class Renderer:
             self.text(f"PHOENIX {game.phoenix.mode.upper()} / {game.phoenix.remaining:.0f}s / B SWITCH", (self.width / 2, self.height - 123), 21, GOLD, True)
         elif game.flow.ready:
             self.text("PHOENIX READY / E SUMMON / B MODE", (self.width / 2, self.height - 123), 21, GOLD, True)
+        else:
+            self.text(f"PHOENIX FLOW {game.flow.energy:.0f}% / E WHEN READY", (self.width / 2, self.height - 123), 19, MUTED, True)
         self.text(f"{len(game.drones)} DRONE{'S' if len(game.drones) != 1 else ''} / H HANGAR", (self.width / 2, self.height - 27), 18, TEAL, True)
         if game.progress.error:
             self.text(game.progress.error, (self.width / 2, 190), 21, RED, True)
@@ -283,7 +285,8 @@ class Renderer:
         self.text("LAUNCH SORTIE   /   ENTER", button.center, 24, INK, True)
         self.text("W thrust   S brake   A/D bank   Shift boost", (82, 488), 24)
         self.text("Mouse aim   Left fire   Right/Space missile", (82, 520), 24)
-        self.text("E Phoenix   B mode   H hangar   P/Esc pause", (82, 552), 24)
+        self.text("Fill PHOENIX FLOW, then E summon / B switch mode", (82, 552), 21, GOLD)
+        self.text("H hangar / P or Esc pause", (82, 578), 21)
         self.text(f"{game.progress.coins} COINS / {len(game.progress.owned)} AIRCRAFT / H OPEN HANGAR", (82, self.height - 65), 21, GOLD)
         if game.progress.error:
             self.text(game.progress.error, (82, self.height - 32), 18, RED)
